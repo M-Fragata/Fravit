@@ -1,6 +1,12 @@
 import React, { useState, useEffect } from 'react';
 import type { ProjectDetail } from '../../types';
+import type { Point2D } from '../../cad-core/types';
 import { projectService } from '../../services/api';
+import { useBIM, bimStore } from '../../cad-core/engine/bimStore';
+import { CADViewport } from '../canvas/CADViewport';
+import { CADToolbar } from '../layout/CADToolbar';
+import { CADStatusBar } from '../layout/CADStatusBar';
+import { PropertiesPanel } from '../properties/PropertiesPanel';
 import {
   ArrowLeft,
   Save,
@@ -9,7 +15,6 @@ import {
   Square,
   Layers,
   Scissors,
-  Grid,
 } from 'lucide-react';
 
 interface EditorPreviewProps {
@@ -20,30 +25,67 @@ interface EditorPreviewProps {
 export const EditorPreview: React.FC<EditorPreviewProps> = ({ projectId, onBack }) => {
   const [project, setProject] = useState<ProjectDetail | null>(null);
   const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState<'plan' | '3d' | 'section' | 'sheet'>('plan');
+  const [cursorPos, setCursorPos] = useState<Point2D>({ x: 0, y: 0 });
+
+  const { activeView, levels, activeLevelId, elements } = useBIM();
 
   useEffect(() => {
+    let isMounted = true;
     async function loadProject() {
       try {
-        setLoading(true);
+        if (isMounted) setLoading(true);
         const data = await projectService.get(projectId);
-        setProject(data);
+        if (isMounted) {
+          setProject(data);
+          // Inicializar bimStore com dados do projeto
+          bimStore.loadProjectData(data.bimData);
+        }
       } catch (err: any) {
         alert(err.message || 'Erro ao carregar projeto.');
         onBack();
       } finally {
-        setLoading(false);
+        if (isMounted) setLoading(false);
       }
     }
     loadProject();
+    return () => {
+      isMounted = false;
+    };
   }, [projectId, onBack]);
+
+  const handleSave = async () => {
+    if (!project) return;
+    try {
+      const updatedBimData = {
+        version: '1.0.0',
+        meta: {
+          projectName: project.title,
+          author: 'Arquiteto',
+          unit: 'm',
+          createdAt: project.createdAt,
+        },
+        activeLevelId,
+        levels,
+        elements,
+        sheets: [],
+      };
+
+      await projectService.update(project.id, {
+        bimData: updatedBimData,
+      });
+
+      alert('Projeto salvo com sucesso no banco de dados SQLite!');
+    } catch (err: any) {
+      alert(err.message || 'Erro ao salvar projeto.');
+    }
+  };
 
   if (loading || !project) {
     return (
       <div style={{ height: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--bg-main)' }}>
         <div style={{ textAlign: 'center' }}>
-          <div style={{ fontSize: '18px', fontWeight: 600, marginBottom: 8 }}>Carregando projeto Fravit...</div>
-          <div style={{ color: 'var(--text-muted)', fontSize: '14px' }}>Preparando modelo BIM e vistas gráficas</div>
+          <div style={{ fontSize: '18px', fontWeight: 600, marginBottom: 8 }}>Carregando modelo BIM Fravit...</div>
+          <div style={{ color: 'var(--text-muted)', fontSize: '14px' }}>Preparando motor gráfico WebGL e precisão técnica</div>
         </div>
       </div>
     );
@@ -51,7 +93,7 @@ export const EditorPreview: React.FC<EditorPreviewProps> = ({ projectId, onBack 
 
   return (
     <div style={{ height: '100vh', display: 'flex', flexDirection: 'column', background: 'var(--bg-main)' }}>
-      {/* Barra de Menus Superior do Editor */}
+      {/* Barra Superior do Editor */}
       <header
         style={{
           height: '56px',
@@ -61,6 +103,7 @@ export const EditorPreview: React.FC<EditorPreviewProps> = ({ projectId, onBack 
           alignItems: 'center',
           justifyContent: 'space-between',
           padding: '0 20px',
+          zIndex: 30,
         }}
       >
         <div className="flex items-center gap-3">
@@ -82,12 +125,12 @@ export const EditorPreview: React.FC<EditorPreviewProps> = ({ projectId, onBack 
               {project.title}
             </div>
             <div style={{ fontSize: '11px', color: 'var(--cad-cyan)' }}>
-              Fravit BIM Core v1.0 • {project.bimData?.levels?.length || 2} Níveis
+              Fravit BIM Core v1.0 • {levels.length} Níveis
             </div>
           </div>
         </div>
 
-        {/* Abas Superiores de Visualização */}
+        {/* Abas Centrais de Visualização */}
         <div
           style={{
             display: 'flex',
@@ -99,7 +142,7 @@ export const EditorPreview: React.FC<EditorPreviewProps> = ({ projectId, onBack 
           }}
         >
           <button
-            onClick={() => setActiveTab('plan')}
+            onClick={() => bimStore.setActiveView('plan')}
             style={{
               padding: '6px 14px',
               borderRadius: 'var(--radius-sm)',
@@ -108,8 +151,8 @@ export const EditorPreview: React.FC<EditorPreviewProps> = ({ projectId, onBack 
               display: 'flex',
               alignItems: 'center',
               gap: 6,
-              background: activeTab === 'plan' ? 'var(--cad-blue)' : 'transparent',
-              color: activeTab === 'plan' ? '#fff' : 'var(--text-muted)',
+              background: activeView === 'plan' ? 'var(--cad-blue)' : 'transparent',
+              color: activeView === 'plan' ? '#fff' : 'var(--text-muted)',
             }}
           >
             <Square size={14} />
@@ -117,7 +160,7 @@ export const EditorPreview: React.FC<EditorPreviewProps> = ({ projectId, onBack 
           </button>
 
           <button
-            onClick={() => setActiveTab('3d')}
+            onClick={() => bimStore.setActiveView('3d')}
             style={{
               padding: '6px 14px',
               borderRadius: 'var(--radius-sm)',
@@ -126,8 +169,8 @@ export const EditorPreview: React.FC<EditorPreviewProps> = ({ projectId, onBack 
               display: 'flex',
               alignItems: 'center',
               gap: 6,
-              background: activeTab === '3d' ? 'var(--cad-blue)' : 'transparent',
-              color: activeTab === '3d' ? '#fff' : 'var(--text-muted)',
+              background: activeView === '3d' ? 'var(--cad-blue)' : 'transparent',
+              color: activeView === '3d' ? '#fff' : 'var(--text-muted)',
             }}
           >
             <Box size={14} />
@@ -135,7 +178,7 @@ export const EditorPreview: React.FC<EditorPreviewProps> = ({ projectId, onBack 
           </button>
 
           <button
-            onClick={() => setActiveTab('section')}
+            onClick={() => bimStore.setActiveView('section')}
             style={{
               padding: '6px 14px',
               borderRadius: 'var(--radius-sm)',
@@ -144,8 +187,8 @@ export const EditorPreview: React.FC<EditorPreviewProps> = ({ projectId, onBack 
               display: 'flex',
               alignItems: 'center',
               gap: 6,
-              background: activeTab === 'section' ? 'var(--cad-blue)' : 'transparent',
-              color: activeTab === 'section' ? '#fff' : 'var(--text-muted)',
+              background: activeView === 'section' ? 'var(--cad-blue)' : 'transparent',
+              color: activeView === 'section' ? '#fff' : 'var(--text-muted)',
             }}
           >
             <Scissors size={14} />
@@ -153,7 +196,7 @@ export const EditorPreview: React.FC<EditorPreviewProps> = ({ projectId, onBack 
           </button>
 
           <button
-            onClick={() => setActiveTab('sheet')}
+            onClick={() => bimStore.setActiveView('sheet')}
             style={{
               padding: '6px 14px',
               borderRadius: 'var(--radius-sm)',
@@ -162,8 +205,8 @@ export const EditorPreview: React.FC<EditorPreviewProps> = ({ projectId, onBack 
               display: 'flex',
               alignItems: 'center',
               gap: 6,
-              background: activeTab === 'sheet' ? 'var(--cad-blue)' : 'transparent',
-              color: activeTab === 'sheet' ? '#fff' : 'var(--text-muted)',
+              background: activeView === 'sheet' ? 'var(--cad-blue)' : 'transparent',
+              color: activeView === 'sheet' ? '#fff' : 'var(--text-muted)',
             }}
           >
             <Layers size={14} />
@@ -176,7 +219,7 @@ export const EditorPreview: React.FC<EditorPreviewProps> = ({ projectId, onBack 
           <button
             className="btn-secondary"
             style={{ padding: '6px 12px', fontSize: '13px' }}
-            onClick={() => projectService.exportToFile(project)}
+            onClick={() => projectService.exportToFile(project, { ...project.bimData, elements })}
             title="Download .fravit"
           >
             <Download size={15} />
@@ -185,7 +228,7 @@ export const EditorPreview: React.FC<EditorPreviewProps> = ({ projectId, onBack 
           <button
             className="btn-primary"
             style={{ padding: '6px 14px', fontSize: '13px' }}
-            onClick={() => alert('Projeto salvo com sucesso no banco de dados!')}
+            onClick={handleSave}
           >
             <Save size={15} />
             <span>Salvar</span>
@@ -193,19 +236,22 @@ export const EditorPreview: React.FC<EditorPreviewProps> = ({ projectId, onBack 
         </div>
       </header>
 
-      {/* Área Central de Trabalho do Editor (Workspace) */}
+      {/* Workspace Completo do CAD */}
       <div style={{ flex: 1, display: 'flex', position: 'relative', overflow: 'hidden' }}>
-        {/* Painel do Navegador de Projeto à Esquerda */}
+        {/* Barra de Ferramentas CAD à Esquerda */}
+        <CADToolbar />
+
+        {/* Navegador de Projeto Lateral */}
         <aside
           style={{
-            width: '260px',
+            width: '230px',
             background: 'var(--bg-surface)',
             borderRight: '1px solid var(--border-color)',
             display: 'flex',
             flexDirection: 'column',
           }}
         >
-          <div style={{ padding: '14px 18px', borderBottom: '1px solid var(--border-color)', fontSize: '13px', fontWeight: 600 }}>
+          <div style={{ padding: '12px 16px', borderBottom: '1px solid var(--border-color)', fontSize: '13px', fontWeight: 600 }}>
             Navegador de Projeto
           </div>
 
@@ -214,15 +260,16 @@ export const EditorPreview: React.FC<EditorPreviewProps> = ({ projectId, onBack 
               <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--cad-cyan)', textTransform: 'uppercase', marginBottom: 8 }}>
                 Plantas de Piso
               </div>
-              {project.bimData?.levels?.map((lvl) => (
+              {levels.map((lvl) => (
                 <div
                   key={lvl.id}
+                  onClick={() => bimStore.setActiveLevelId(lvl.id)}
                   style={{
                     padding: '8px 12px',
                     borderRadius: 'var(--radius-sm)',
-                    background: project.bimData.activeLevelId === lvl.id ? 'rgba(37, 99, 235, 0.15)' : 'transparent',
-                    border: `1px solid ${project.bimData.activeLevelId === lvl.id ? 'var(--cad-blue)' : 'transparent'}`,
-                    fontSize: '13px',
+                    background: activeLevelId === lvl.id ? 'rgba(37, 99, 235, 0.15)' : 'transparent',
+                    border: `1px solid ${activeLevelId === lvl.id ? 'var(--cad-blue)' : 'transparent'}`,
+                    fontSize: '12px',
                     cursor: 'pointer',
                     display: 'flex',
                     alignItems: 'center',
@@ -230,7 +277,7 @@ export const EditorPreview: React.FC<EditorPreviewProps> = ({ projectId, onBack 
                     marginBottom: 4,
                   }}
                 >
-                  <span>{lvl.name}</span>
+                  <span style={{ fontWeight: activeLevelId === lvl.id ? 600 : 400 }}>{lvl.name}</span>
                   <span style={{ fontSize: '11px', color: 'var(--text-dim)', fontFamily: 'var(--font-mono)' }}>
                     +{lvl.elevation.toFixed(2)}m
                   </span>
@@ -253,77 +300,23 @@ export const EditorPreview: React.FC<EditorPreviewProps> = ({ projectId, onBack 
               </div>
               <div style={{ fontSize: '12px', color: 'var(--text-muted)', padding: '6px 10px', display: 'flex', alignItems: 'center', gap: 6 }}>
                 <Layers size={13} />
-                <span>A101 - Folha Principal (A1)</span>
+                <span>A101 - Folha Principal</span>
               </div>
             </div>
           </div>
         </aside>
 
-        {/* Viewport Central */}
-        <main
-          style={{
-            flex: 1,
-            background: '#090d14',
-            display: 'flex',
-            flexDirection: 'column',
-            alignItems: 'center',
-            justifyContent: 'center',
-            position: 'relative',
-          }}
-        >
-          {/* Grid de fundo decorativo para CAD */}
-          <div
-            style={{
-              position: 'absolute',
-              inset: 0,
-              backgroundImage: 'radial-gradient(rgba(56, 189, 248, 0.12) 1px, transparent 1px)',
-              backgroundSize: '24px 24px',
-              opacity: 0.7,
-            }}
-          />
-
-          <div
-            style={{
-              position: 'relative',
-              zIndex: 2,
-              textAlign: 'center',
-              padding: 40,
-              background: 'rgba(20, 27, 38, 0.85)',
-              backdropFilter: 'blur(10px)',
-              border: '1px solid var(--border-color)',
-              borderRadius: 'var(--radius-xl)',
-              maxWidth: 580,
-            }}
-          >
-            <Grid size={48} style={{ color: 'var(--cad-cyan)', margin: '0 auto 16px' }} />
-            <h2 style={{ fontSize: '20px', fontWeight: 700, marginBottom: 8 }}>
-              {activeTab === 'plan' && 'Planta Baixa 2D Técnica'}
-              {activeTab === '3d' && 'Visualização Tridimensional (3D Orbit)'}
-              {activeTab === 'section' && 'Cortes Paramétricos'}
-              {activeTab === 'sheet' && 'Prancha de Impressão com Viewports'}
-            </h2>
-            <p style={{ color: 'var(--text-muted)', fontSize: '14px', lineHeight: 1.6, marginBottom: 20 }}>
-              Base da Fase 1 pronta com sucesso! A integração do motor gráfico Three.js unificado (Câmera Ortográfica 2D + Perspectiva 3D), sistema de snaps magnéticos e desenho de paredes entrará em execução na <strong>Fase 2</strong>.
-            </p>
-            <div
-              style={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: 8,
-                padding: '8px 16px',
-                background: 'rgba(16, 185, 129, 0.1)',
-                border: '1px solid rgba(16, 185, 129, 0.3)',
-                borderRadius: 20,
-                color: '#10b981',
-                fontSize: '12px',
-                fontWeight: 600,
-              }}
-            >
-              <span>✓ Fase 1 Concluída: Backend Nativo, JWT, SQLite & Dashboard</span>
-            </div>
-          </div>
+        {/* Viewport Central Three.js com Overlay Canvas */}
+        <main style={{ flex: 1, position: 'relative', overflow: 'hidden' }}>
+          <CADViewport onCursorMove={(pos) => setCursorPos(pos)} />
         </main>
+
+        {/* Painel de Propriedades Paramétricas à Direita */}
+        <PropertiesPanel />
       </div>
+
+      {/* Barra de Status Inferior */}
+      <CADStatusBar cursorPos={cursorPos} />
     </div>
   );
 };
