@@ -432,17 +432,6 @@ export function analyzeWallEndpoint(
         };
       }
 
-      // Regra de Dominância da Quina (Horizontal dominante sobre Vertical)
-      const curHorizRatio = Math.abs(curDx) / curLen;
-      const otherHorizRatio = Math.abs(otherDx) / otherLen;
-
-      let isDominant = false;
-      if (Math.abs(curHorizRatio - otherHorizRatio) > 0.05) {
-        isDominant = curHorizRatio > otherHorizRatio;
-      } else {
-        isDominant = currentWall.id < other.id;
-      }
-
       // Lado local no Three.js BoxGeometry (+halfW ou -halfW)
       // O normal da parede é (-curDy / curLen, curDx / curLen)
       const normalX = -curDy / curLen;
@@ -450,25 +439,17 @@ export function analyzeWallEndpoint(
       const sideDot = vOtherX * normalX + vOtherY * normalY;
       const connectedSide: 1 | -1 | 0 = sideDot > 0.05 ? 1 : sideDot < -0.05 ? -1 : 0;
 
-      if (isDominant) {
-        return {
-          connected: true,
-          otherWall: other,
-          isDominant: true,
-          drawCap: true,
-          extendAmount: other.thickness / 2,
-          connectedSide,
-        };
-      } else {
-        return {
-          connected: true,
-          otherWall: other,
-          isDominant: false,
-          drawCap: false,
-          extendAmount: -(other.thickness / 2),
-          connectedSide,
-        };
-      }
+      // Em quinas (canto entre 2 paredes), AMBAS as paredes se estendem por +other.thickness / 2
+      // para preencher 100% do volume do canto até a quina externa, enquanto clipSegmentByWalls
+      // garante que as linhas internas fiquem abertas e as externas se encontrem perfeitamente em 90°.
+      return {
+        connected: true,
+        otherWall: other,
+        isDominant: true,
+        drawCap: false,
+        extendAmount: other.thickness / 2,
+        connectedSide,
+      };
     }
   }
 
