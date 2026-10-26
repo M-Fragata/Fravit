@@ -232,6 +232,92 @@ export function isWallEndpointConnected(
   return false;
 }
 
+export interface CornerJoint {
+  point: Point2D;
+  thickness: number;
+  height: number;
+  wallAId: string;
+  wallBId: string;
+  dirA: Point2D;
+  dirB: Point2D;
+  outerCorner: Point2D;
+  innerCorner: Point2D;
+  edgeStartA: Point2D;
+  edgeStartB: Point2D;
+}
+
+export function findCornerJoints(walls: WallElement[]): CornerJoint[] {
+  const corners: CornerJoint[] = [];
+  const threshold = 0.12;
+
+  for (let i = 0; i < walls.length; i++) {
+    for (let j = i + 1; j < walls.length; j++) {
+      const wA = walls[i];
+      const wB = walls[j];
+
+      const pairs: [Point2D, Point2D, 'start' | 'end', 'start' | 'end'][] = [
+        [wA.start, wB.start, 'start', 'start'],
+        [wA.start, wB.end, 'start', 'end'],
+        [wA.end, wB.start, 'end', 'start'],
+        [wA.end, wB.end, 'end', 'end'],
+      ];
+
+      for (const [ptA, ptB, endA, endB] of pairs) {
+        if (distance(ptA, ptB) <= threshold) {
+          const cornerPt = { x: (ptA.x + ptB.x) / 2, y: (ptA.y + ptB.y) / 2 };
+          const thick = Math.max(wA.thickness, wB.thickness);
+          const height = Math.max(wA.height, wB.height);
+          const halfT = thick / 2;
+
+          const otherPtA = endA === 'start' ? wA.end : wA.start;
+          const lenA = distance(cornerPt, otherPtA);
+          if (lenA < 0.05) continue;
+          const dirA = { x: (otherPtA.x - cornerPt.x) / lenA, y: (otherPtA.y - cornerPt.y) / lenA };
+
+          const otherPtB = endB === 'start' ? wB.end : wB.start;
+          const lenB = distance(cornerPt, otherPtB);
+          if (lenB < 0.05) continue;
+          const dirB = { x: (otherPtB.x - cornerPt.x) / lenB, y: (otherPtB.y - cornerPt.y) / lenB };
+
+          const outerCorner = {
+            x: cornerPt.x - (dirA.x + dirB.x) * halfT,
+            y: cornerPt.y - (dirA.y + dirB.y) * halfT,
+          };
+          const innerCorner = {
+            x: cornerPt.x + (dirA.x + dirB.x) * halfT,
+            y: cornerPt.y + (dirA.y + dirB.y) * halfT,
+          };
+
+          const edgeStartA = {
+            x: cornerPt.x - dirB.x * halfT,
+            y: cornerPt.y - dirB.y * halfT,
+          };
+          const edgeStartB = {
+            x: cornerPt.x - dirA.x * halfT,
+            y: cornerPt.y - dirA.y * halfT,
+          };
+
+          corners.push({
+            point: cornerPt,
+            thickness: thick,
+            height,
+            wallAId: wA.id,
+            wallBId: wB.id,
+            dirA,
+            dirB,
+            outerCorner,
+            innerCorner,
+            edgeStartA,
+            edgeStartB,
+          });
+        }
+      }
+    }
+  }
+
+  return corners;
+}
+
 export function findWallJoints(walls: WallElement[]): WallJoint[] {
   const joints: WallJoint[] = [];
   const threshold = 0.08; // 8cm para tolerância de junção
