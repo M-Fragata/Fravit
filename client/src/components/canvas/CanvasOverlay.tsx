@@ -86,15 +86,19 @@ export const CanvasOverlay: React.FC<CanvasOverlayProps> = ({
           ctx.lineCap = 'round';
           ctx.stroke();
 
-          // Medida dinâmica flutuante
+          // Medida dinâmica flutuante com indicador de ângulo polar (ex: 45°)
           const distMeters = distance(drawingStart, snapped);
           const midX = (screenStart.x + screenSnap.x) / 2;
           const midY = (screenStart.y + screenSnap.y) / 2;
 
+          const hasPolarAngle = currentSnapped?.polarAngle !== undefined;
+          const label = hasPolarAngle
+            ? `${distMeters.toFixed(2)} m  ∠ ${currentSnapped.polarAngle}°`
+            : `${distMeters.toFixed(2)} m`;
+
           ctx.fillStyle = 'rgba(12, 16, 23, 0.95)';
-          ctx.strokeStyle = '#38bdf8';
+          ctx.strokeStyle = hasPolarAngle ? '#10b981' : '#38bdf8';
           ctx.lineWidth = 1.5;
-          const label = `${distMeters.toFixed(2)} m`;
           ctx.font = '700 13px "JetBrains Mono", monospace';
           const textWidth = ctx.measureText(label).width;
 
@@ -103,18 +107,18 @@ export const CanvasOverlay: React.FC<CanvasOverlayProps> = ({
           ctx.fill();
           ctx.stroke();
 
-          ctx.fillStyle = '#38bdf8';
+          ctx.fillStyle = hasPolarAngle ? '#10b981' : '#38bdf8';
           ctx.textAlign = 'center';
           ctx.textBaseline = 'middle';
           ctx.fillText(label, midX, midY - 14);
         }
 
-        // B. Guias Polares (Raios pontilhados em 45°)
+        // B. Guias Polares (Raios pontilhados estendidos nos ângulos de 45°)
         if (currentSnapped?.guideLines) {
           ctx.save();
-          ctx.setLineDash([4, 4]);
-          ctx.strokeStyle = 'rgba(56, 189, 248, 0.7)';
-          ctx.lineWidth = 1.5;
+          ctx.setLineDash([6, 5]);
+          ctx.strokeStyle = 'rgba(56, 189, 248, 0.85)';
+          ctx.lineWidth = 1.8;
 
           for (const guide of currentSnapped.guideLines) {
             const s = worldToScreen(guide.start.x, guide.start.y);

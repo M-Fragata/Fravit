@@ -313,26 +313,62 @@ export const CADViewport: React.FC<CADViewportProps> = ({ onCursorMove }) => {
     return { x: screenX, y: screenY };
   }, []);
 
-  // Manipulação de Mouse no modo 3D
-  const handleMouseDown3D = (e: React.MouseEvent) => {
-    if (activeView === '3d' && e.button === 0) {
+  // Manipulação de Mouse no modo 3D (Shift+Scroll para Órbita 3D, Scroll puro para Pan 2D)
+  const orbitModeRef = useRef<'orbit' | 'pan'>('orbit');
+
+  const handlePointerDown3D = (e: React.PointerEvent) => {
+    if (activeView !== '3d') return;
+
+    // Scroll (botão 1), botão direito (2) ou botão esquerdo (0)
+    if (e.button === 1 || e.button === 2 || e.button === 0) {
+      // Se Shift estiver pressionado (ou botão esquerdo): Órbita 3D
+      // Se apenas o Scroll (botão 1) ou botão direito: Pan 2D
+      const shouldOrbit = e.shiftKey || (e.button === 0 && !e.altKey);
+      orbitModeRef.current = shouldOrbit ? 'orbit' : 'pan';
+
       orbitRef.current.isDragging = true;
       orbitRef.current.lastMouse = { x: e.clientX, y: e.clientY };
+      try {
+        e.currentTarget.setPointerCapture(e.pointerId);
+      } catch {}
+      e.preventDefault();
     }
   };
 
-  const handleMouseMove3D = (e: React.MouseEvent) => {
-    if (orbitRef.current.isDragging && activeView === '3d') {
-      const dx = e.clientX - orbitRef.current.lastMouse.x;
-      const dy = e.clientY - orbitRef.current.lastMouse.y;
+  const handlePointerMove3D = (e: React.PointerEvent) => {
+    if (activeView !== '3d' || !orbitRef.current.isDragging) return;
+
+    const dx = e.clientX - orbitRef.current.lastMouse.x;
+    const dy = e.clientY - orbitRef.current.lastMouse.y;
+    orbitRef.current.lastMouse = { x: e.clientX, y: e.clientY };
+
+    if (orbitModeRef.current === 'orbit') {
+      // Rotação orbital 3D
       orbitRef.current.theta -= dx * 0.008;
-      orbitRef.current.phi = Math.max(0.1, Math.min(Math.PI / 2 - 0.05, orbitRef.current.phi - dy * 0.008));
-      orbitRef.current.lastMouse = { x: e.clientX, y: e.clientY };
+      orbitRef.current.phi = Math.max(0.05, Math.min(Math.PI / 2 - 0.02, orbitRef.current.phi - dy * 0.008));
+    } else {
+      // Pan 2D no espaço 3D (deslocamento pelo plano de visão da câmera)
+      if (perspCameraRef.current) {
+        const cam = perspCameraRef.current;
+        const dir = new THREE.Vector3();
+        cam.getWorldDirection(dir);
+        const right = new THREE.Vector3().crossVectors(dir, cam.up).normalize();
+        const up = new THREE.Vector3().crossVectors(right, dir).normalize();
+
+        const panSpeed = orbitRef.current.radius * 0.0016;
+        orbitRef.current.target.addScaledVector(right, -dx * panSpeed);
+        orbitRef.current.target.addScaledVector(up, dy * panSpeed);
+      }
     }
   };
 
-  const handleMouseUp3D = () => {
-    orbitRef.current.isDragging = false;
+  const handlePointerUp3D = (e: React.PointerEvent) => {
+    if (activeView === '3d') {
+      orbitRef.current.isDragging = false;
+      try {
+        e.currentTarget.releasePointerCapture(e.pointerId);
+      } catch {}
+    }
   };
 
   return (
@@ -346,9 +382,10 @@ export const CADViewport: React.FC<CADViewportProps> = ({ onCursorMove }) => {
         userSelect: 'none',
       }}
       onContextMenu={(e) => e.preventDefault()}
-      onMouseDown={handleMouseDown3D}
-      onMouseMove={handleMouseMove3D}
-      onMouseUp={handleMouseUp3D}
+      onAuxClick={(e) => e.preventDefault()}
+      onPointerDown={handlePointerDown3D}
+      onPointerMove={handlePointerMove3D}
+      onPointerUp={handlePointerUp3D}
     >
       {/* Subcontainer isolado para o WebGL do Three.js */}
       <div

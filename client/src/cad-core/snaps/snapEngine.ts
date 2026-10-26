@@ -26,27 +26,27 @@ export function applyOrtho(start: Point2D, current: Point2D): Point2D {
   }
 }
 
-// Travar cursor com rastreamento polar (ângulos de 45°)
+// Travar cursor com rastreamento polar (ângulos de 45°: 0°, 45°, 90°, 135°, 180°, 225°, 270°, 315°)
 export function applyPolar(
   start: Point2D,
   current: Point2D,
-  toleranceDeg: number = 4
-): { point: Point2D; isPolar: boolean; angleDeg: number } {
+  toleranceDeg: number = 6
+): { point: Point2D; isPolar: boolean; angleDeg: number; snapRad: number } {
   const dx = current.x - start.x;
   const dy = current.y - start.y;
   const len = Math.sqrt(dx * dx + dy * dy);
 
-  if (len < 0.05) return { point: current, isPolar: false, angleDeg: 0 };
+  if (len < 0.05) return { point: current, isPolar: false, angleDeg: 0, snapRad: 0 };
 
   let angleRad = Math.atan2(dy, dx);
   let angleDeg = (angleRad * 180) / Math.PI;
   if (angleDeg < 0) angleDeg += 360;
 
-  // Ângulos polares suportados: 0, 45, 90, 135, 180, 225, 270, 315
+  // Ângulos polares a cada 45°
   const targets = [0, 45, 90, 135, 180, 225, 270, 315, 360];
   for (const target of targets) {
     if (Math.abs(angleDeg - target) <= toleranceDeg) {
-      const snapRad = (target * Math.PI) / 180;
+      const snapRad = ((target % 360) * Math.PI) / 180;
       return {
         point: {
           x: start.x + len * Math.cos(snapRad),
@@ -54,14 +54,15 @@ export function applyPolar(
         },
         isPolar: true,
         angleDeg: target % 360,
+        snapRad,
       };
     }
   }
 
-  return { point: current, isPolar: false, angleDeg };
+  return { point: current, isPolar: false, angleDeg, snapRad: angleRad };
 }
 
-// Motor de Snaps Inteligentes (Endpoint, Midpoint, Grid)
+// Motor de Snaps Inteligentes (Endpoint, Midpoint, Polar, Grid)
 export function computeSnap(
   rawWorldPoint: Point2D,
   drawingStart: Point2D | null,
@@ -72,26 +73,19 @@ export function computeSnap(
   let candidatePoint = { ...rawWorldPoint };
   const worldThreshold = config.snapThresholdPx / Math.max(pixelsPerMeter, 1);
 
-  // 1. Ortho Mode tem precedência se estiver desenhando
+  // 1. Ortho Mode tem precedência absoluta se estiver ativo e desenhando
   if (config.orthoMode && drawingStart) {
     candidatePoint = applyOrtho(drawingStart, candidatePoint);
+    if (config.gridSnap) {
+      candidatePoint = snapToGrid(candidatePoint, config.gridSize);
+    }
     return {
       point: candidatePoint,
       type: 'grid',
     };
   }
 
-  // 2. Polar Tracking
-  let polarGuide: { start: Point2D; end: Point2D; isPolar?: boolean } | null = null;
-  if (config.polarTracking && drawingStart) {
-    const polar = applyPolar(drawingStart, candidatePoint);
-    if (polar.isPolar) {
-      candidatePoint = polar.point;
-      polarGuide = { start: drawingStart, end: candidatePoint, isPolar: true };
-    }
-  }
-
-  // 3. Object Snaps (Extremidades e Pontos Médios de Paredes)
+  // 2. Object Snaps (Extremidades e Pontos Médios de Paredes)
   if (config.objectSnap) {
     let closestSnap: SnapResult | null = null;
     let minDistance = worldThreshold;
@@ -140,19 +134,50 @@ export function computeSnap(
     }
   }
 
-  // 4. Grid Snap se não pegou nenhum ponto de objeto
+  // 3. Rastreamento Polar (Snap magnético em 45°, 90°, 135°, etc.)
+  if (config.polarTracking && drawingStart) {
+    const polar = applyPolar(drawingStart, candidatePoint);
+    if (polar.isPolar) {
+      const dx = candidatePoint.x - drawingStart.x;
+      const dy = candidatePoint.y - drawingStart.y;
+      let len = Math.sqrt(dx * dx + dy * dy);
+
+      // Se Grid Snap estiver ativo, arredonda o comprimento mantendo o ângulo polar exato!
+      if (config.gridSnap) {
+        len = Math.max(config.gridSize, Math.round(len / config.gridSize) * config.gridSize);
+      }
+
+      const lockedPoint: Point2D = {
+        x: drawingStart.x + len * Math.cos(polar.snapRad),
+        y: drawingStart.y + len * Math.sin(polar.snapRad),
+      };
+
+      // Raio pontilhado que se estende além do cursor para visualização clara do alinhamento
+      const rayEnd: Point2D = {
+        x: drawingStart.x + (len + 15) * Math.cos(polar.snapRad),
+        y: drawingStart.y + (len + 15) * Math.sin(polar.snapRad),
+      };
+
+      return {
+        point: lockedPoint,
+        type: 'grid',
+        polarAngle: polar.angleDeg,
+        guideLines: [{ start: drawingStart, end: rayEnd, isPolar: true }],
+      };
+    }
+  }
+
+  // 4. Grid Snap padrão quando não há snap de objeto nem polar
   if (config.gridSnap) {
     const snapped = snapToGrid(candidatePoint, config.gridSize);
     return {
       point: snapped,
       type: 'grid',
-      guideLines: polarGuide ? [polarGuide] : undefined,
     };
   }
 
   return {
     point: candidatePoint,
     type: 'grid',
-    guideLines: polarGuide ? [polarGuide] : undefined,
   };
 }

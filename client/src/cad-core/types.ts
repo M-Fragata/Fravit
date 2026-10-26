@@ -15,6 +15,7 @@ export interface SnapResult {
   point: Point2D;
   type: SnapType;
   sourceElementId?: string;
+  polarAngle?: number;
   guideLines?: { start: Point2D; end: Point2D; isPolar?: boolean }[];
 }
 
