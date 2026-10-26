@@ -50,6 +50,59 @@ export type ToolType =
   | 'dimension'
   | 'section';
 
+export type DrawMode = 'line' | 'rectangle';
+
+export interface WallTypeItem {
+  id: string;
+  name: string;
+  thickness: number;
+  height: number;
+  material: string;
+}
+
+export interface DoorTypeItem {
+  id: string;
+  name: string;
+  width: number;
+  height: number;
+  category: 'Giro' | 'Correr' | 'Pivotante';
+  frameThickness?: number;
+  material?: string;
+}
+
+export interface WindowTypeItem {
+  id: string;
+  name: string;
+  width: number;
+  height: number;
+  sillHeight: number;
+  material?: string;
+}
+
+export interface FloorTypeItem {
+  id: string;
+  name: string;
+  thickness: number;
+  material: string;
+}
+
+export interface RoofTypeItem {
+  id: string;
+  name: string;
+  pitch: number; // %
+  overhang: number; // m
+  material: string;
+}
+
+export interface StairTypeItem {
+  id: string;
+  name: string;
+  width: number;
+  riserHeight: number;
+  treadDepth: number;
+  material: string;
+}
+
 export interface WallElement {
   id: string;
   type: 'wall';
@@ -58,6 +111,7 @@ export interface WallElement {
   thickness: number; // em metros (ex: 0.15)
   height: number; // em metros (ex: 2.80)
   levelId: string;
+  typeName?: string;
   material?: string;
 }
 
@@ -71,6 +125,8 @@ export interface DoorElement {
   flipFacing: boolean; // inverte lado de abertura
   flipHand: boolean; // inverte mão esquerda/direita
   levelId: string;
+  typeName?: string;
+  material?: string;
 }
 
 export interface WindowElement {
@@ -82,6 +138,8 @@ export interface WindowElement {
   height: number; // ex: 1.00
   sillHeight: number; // peitoril ex: 1.10
   levelId: string;
+  typeName?: string;
+  material?: string;
 }
 
 export interface FloorElement {
@@ -91,6 +149,8 @@ export interface FloorElement {
   thickness: number; // ex: 0.10
   elevationOffset: number; // ex: 0.00 ou -0.05
   levelId: string;
+  typeName?: string;
+  material?: string;
 }
 
 export interface RoofElement {
@@ -100,6 +160,8 @@ export interface RoofElement {
   pitch: number; // inclinação em % ou graus
   overhang: number; // beiral ex: 0.60
   levelId: string;
+  typeName?: string;
+  material?: string;
 }
 
 export interface StairElement {
@@ -112,6 +174,8 @@ export interface StairElement {
   treadDepth: number; // piso ex: 0.28
   stepsCount: number;
   levelId: string;
+  typeName?: string;
+  material?: string;
 }
 
 export interface RoomElement {
@@ -121,6 +185,9 @@ export interface RoomElement {
   polygon: Point2D[];
   areaM2: number;
   levelId: string;
+  number?: string;
+  finishFloor?: string;
+  finishWall?: string;
 }
 
 export interface RoomSeparatorElement {

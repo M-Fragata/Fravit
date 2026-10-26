@@ -2,6 +2,13 @@ import { useSyncExternalStore } from 'react';
 import type {
   BIMLevel,
   ToolType,
+  DrawMode,
+  WallTypeItem,
+  DoorTypeItem,
+  WindowTypeItem,
+  FloorTypeItem,
+  RoofTypeItem,
+  StairTypeItem,
   WallElement,
   DoorElement,
   WindowElement,
@@ -21,6 +28,7 @@ export interface BIMState {
   levels: BIMLevel[];
   activeLevelId: string;
   activeTool: ToolType;
+  drawMode: DrawMode;
   activeView: 'plan' | '3d' | 'section' | 'sheet';
   activeSectionId: string | null;
   activeSheetId: string;
@@ -28,11 +36,21 @@ export interface BIMState {
   selectedElementIds: string[];
   snapConfig: SnapConfig;
 
+  // Catálogo de Famílias / Tipos no Padrão Revit
+  wallTypes: WallTypeItem[];
+  doorTypes: DoorTypeItem[];
+  windowTypes: WindowTypeItem[];
+  floorTypes: FloorTypeItem[];
+  roofTypes: RoofTypeItem[];
+  stairTypes: StairTypeItem[];
+
   // Parâmetros padrão de criação
   defaults: {
-    wall: { thickness: number; height: number };
-    door: { width: number; height: number };
-    window: { width: number; height: number; sillHeight: number };
+    wall: { thickness: number; height: number; typeId?: string };
+    door: { width: number; height: number; typeId?: string };
+    window: { width: number; height: number; sillHeight: number; typeId?: string };
+    floor: { thickness: number; typeId?: string };
+    roof: { pitch: number; overhang: number; typeId?: string };
   };
 
   elements: {
@@ -54,6 +72,53 @@ export interface BIMState {
   };
 }
 
+const initialWallTypes: WallTypeItem[] = [
+  { id: 'wt-15-comum', name: 'Alvenaria Cerâmica 15cm (Padrão)', thickness: 0.15, height: 2.8, material: 'Tijolo Cerâmico com Emboço' },
+  { id: 'wt-20-externa', name: 'Alvenaria Externa 20cm', thickness: 0.20, height: 2.8, material: 'Alvenaria com Reboco 20cm' },
+  { id: 'wt-10-drywall', name: 'Divisória Drywall 10cm', thickness: 0.10, height: 2.8, material: 'Gesso Acartonado / Lã de Vidro' },
+  { id: 'wt-15-concreto', name: 'Parede Concreto Armado 15cm', thickness: 0.15, height: 2.8, material: 'Concreto Estrutural' },
+  { id: 'wt-19-bloco', name: 'Alvenaria Estrutural Bloco 19cm', thickness: 0.19, height: 2.8, material: 'Bloco de Concreto Estrutural' },
+];
+
+const initialDoorTypes: DoorTypeItem[] = [
+  { id: 'dt-p60', name: 'Porta de Giro - P60 (0.60 x 2.10m)', width: 0.60, height: 2.10, category: 'Giro', frameThickness: 0.05, material: 'Madeira Lisa Envernizada' },
+  { id: 'dt-p70', name: 'Porta de Giro - P70 (0.70 x 2.10m)', width: 0.70, height: 2.10, category: 'Giro', frameThickness: 0.05, material: 'Madeira Lisa Esmaltada' },
+  { id: 'dt-p80', name: 'Porta de Giro - P80 (0.80 x 2.10m)', width: 0.80, height: 2.10, category: 'Giro', frameThickness: 0.05, material: 'Madeira Semisólida' },
+  { id: 'dt-p90', name: 'Porta de Giro - P90 (0.90 x 2.10m)', width: 0.90, height: 2.10, category: 'Giro', frameThickness: 0.05, material: 'Madeira Maciça / Entrada' },
+  { id: 'dt-p100', name: 'Porta de Giro - P100 (1.00 x 2.10m)', width: 1.00, height: 2.10, category: 'Giro', frameThickness: 0.05, material: 'Madeira Maciça Acessibilidade NBR 9050' },
+  { id: 'dt-correr-160', name: 'Porta de Correr 2 Folhas (1.60 x 2.10m)', width: 1.60, height: 2.10, category: 'Correr', frameThickness: 0.05, material: 'Alumínio e Vidro Temperado' },
+  { id: 'dt-pivot-110', name: 'Porta Pivotante - P110 (1.10 x 2.40m)', width: 1.10, height: 2.40, category: 'Pivotante', frameThickness: 0.08, material: 'Madeira Nobre Pivotante' },
+];
+
+const initialWindowTypes: WindowTypeItem[] = [
+  { id: 'wt-j100', name: 'Janela de Correr - J100 (1.00 x 1.00m • Peit 1.10m)', width: 1.00, height: 1.00, sillHeight: 1.10, material: 'Alumínio Preto / Vidro 6mm' },
+  { id: 'wt-j120', name: 'Janela de Correr - J120 (1.20 x 1.00m • Peit 1.10m)', width: 1.20, height: 1.00, sillHeight: 1.10, material: 'Alumínio Branco / Vidro 6mm' },
+  { id: 'wt-j150', name: 'Janela de Correr - J150 (1.50 x 1.20m • Peit 1.00m)', width: 1.50, height: 1.20, sillHeight: 1.00, material: 'Alumínio Anodizado / Vidro 8mm' },
+  { id: 'wt-j060-max', name: 'Janela Maxim-ar - J060 (0.60 x 0.60m • Peit 1.60m - Banheiro)', width: 0.60, height: 0.60, sillHeight: 1.60, material: 'Alumínio com Vidro Mini-boreal' },
+  { id: 'wt-j200-pan', name: 'Janela Panorâmica - J200 (2.00 x 1.50m • Peit 0.80m)', width: 2.00, height: 1.50, sillHeight: 0.80, material: 'Pele de Vidro / Alumínio' },
+];
+
+const initialFloorTypes: FloorTypeItem[] = [
+  { id: 'ft-cer-10', name: 'Piso Cerâmico Interno - 10cm', thickness: 0.10, material: 'Porcelanato Polido + Argamassa' },
+  { id: 'ft-laje-15', name: 'Laje Concreto Armado - 15cm (Padrão)', thickness: 0.15, material: 'Concreto FCK 25MPa' },
+  { id: 'ft-vinil-8', name: 'Piso Vinílico / Laminado - 8cm', thickness: 0.08, material: 'Vinílico Amadeirado' },
+  { id: 'ft-deck-12', name: 'Deck de Madeira Externo - 12cm', thickness: 0.12, material: 'Cumaru / Ipê Tratado' },
+  { id: 'ft-ind-20', name: 'Radier / Piso Industrial - 20cm', thickness: 0.20, material: 'Concreto Polido Alta Resistência' },
+];
+
+const initialRoofTypes: RoofTypeItem[] = [
+  { id: 'rt-cer-30', name: 'Telhado Cerâmico Colonial (Inclinação 30% • Beiral 0.60m)', pitch: 30, overhang: 0.60, material: 'Telha Cerâmica Vermelha' },
+  { id: 'rt-met-10', name: 'Telhado Fibrocimento / Metálico (Inclinação 10% • Beiral 0.50m)', pitch: 10, overhang: 0.50, material: 'Telha Aluzinco Trapezoidal' },
+  { id: 'rt-sand-5', name: 'Telha Termoacústica Sandwich (Inclinação 5% • Beiral 0.30m)', pitch: 5, overhang: 0.30, material: 'Telha Sandwich EPS' },
+  { id: 'rt-laje-2', name: 'Laje Plana Impermeabilizada (Inclinação 2% • Beiral 0.00m)', pitch: 2, overhang: 0.00, material: 'Manta Asfáltica + Argamassa de Proteção' },
+];
+
+const initialStairTypes: StairTypeItem[] = [
+  { id: 'st-conc', name: 'Escada Moldada em Concreto (Piso 28cm • Espelho 17.5cm)', width: 0.90, riserHeight: 0.175, treadDepth: 0.28, material: 'Concreto com Revestimento Granito' },
+  { id: 'st-met', name: 'Escada Metálica Industrial (Piso 26cm • Espelho 18cm)', width: 0.80, riserHeight: 0.18, treadDepth: 0.26, material: 'Aço Estrutural com Chapa Xadrez' },
+  { id: 'st-mad', name: 'Escada de Madeira Nobre (Piso 30cm • Espelho 17cm)', width: 1.00, riserHeight: 0.17, treadDepth: 0.30, material: 'Madeira Maciça Ipê' },
+];
+
 const initialBimState: BIMState = {
   levels: [
     { id: 'lvl-ground', name: 'Nível 1 - Térreo', elevation: 0.0, height: 2.8 },
@@ -62,6 +127,7 @@ const initialBimState: BIMState = {
   ],
   activeLevelId: 'lvl-ground',
   activeTool: 'select',
+  drawMode: 'line',
   activeView: 'plan',
   activeSectionId: null,
   activeSheetId: 'sheet-1',
@@ -106,10 +172,18 @@ const initialBimState: BIMState = {
     orthoMode: false,
     polarTracking: true,
   },
+  wallTypes: initialWallTypes,
+  doorTypes: initialDoorTypes,
+  windowTypes: initialWindowTypes,
+  floorTypes: initialFloorTypes,
+  roofTypes: initialRoofTypes,
+  stairTypes: initialStairTypes,
   defaults: {
-    wall: { thickness: 0.15, height: 2.8 },
-    door: { width: 0.8, height: 2.1 },
-    window: { width: 1.2, height: 1.0, sillHeight: 1.1 },
+    wall: { thickness: 0.15, height: 2.8, typeId: 'wt-15-comum' },
+    door: { width: 0.8, height: 2.1, typeId: 'dt-p80' },
+    window: { width: 1.2, height: 1.0, sillHeight: 1.1, typeId: 'wt-j120' },
+    floor: { thickness: 0.15, typeId: 'ft-laje-15' },
+    roof: { pitch: 10, overhang: 0.6, typeId: 'rt-met-10' },
   },
   elements: {
     walls: [
@@ -155,6 +229,21 @@ export const bimStore = {
 
   setActiveTool: (tool: ToolType) => {
     currentState = { ...currentState, activeTool: tool };
+    emitChange();
+  },
+
+  setDrawMode: (mode: DrawMode) => {
+    currentState = { ...currentState, drawMode: mode };
+    emitChange();
+  },
+
+  setSelectedElementIds: (ids: string[]) => {
+    currentState = { ...currentState, selectedElementIds: ids };
+    emitChange();
+  },
+
+  clearSelection: () => {
+    currentState = { ...currentState, selectedElementIds: [] };
     emitChange();
   },
 
@@ -282,34 +371,172 @@ export const bimStore = {
     emitChange();
   },
 
-  setWallDefaults: (thickness: number, height: number) => {
+  setWallDefaults: (thickness: number, height: number, typeId?: string) => {
     currentState = {
       ...currentState,
       defaults: {
         ...currentState.defaults,
-        wall: { thickness, height },
+        wall: { thickness, height, typeId: typeId || currentState.defaults.wall.typeId },
       },
     };
     emitChange();
   },
 
-  setDoorDefaults: (width: number, height: number) => {
+  setDoorDefaults: (width: number, height: number, typeId?: string) => {
     currentState = {
       ...currentState,
       defaults: {
         ...currentState.defaults,
-        door: { width, height },
+        door: { width, height, typeId: typeId || currentState.defaults.door.typeId },
       },
     };
     emitChange();
   },
 
-  setWindowDefaults: (width: number, height: number, sillHeight: number) => {
+  setWindowDefaults: (width: number, height: number, sillHeight: number, typeId?: string) => {
     currentState = {
       ...currentState,
       defaults: {
         ...currentState.defaults,
-        window: { width, height, sillHeight },
+        window: { width, height, sillHeight, typeId: typeId || currentState.defaults.window.typeId },
+      },
+    };
+    emitChange();
+  },
+
+  setFloorDefaults: (thickness: number, typeId?: string) => {
+    currentState = {
+      ...currentState,
+      defaults: {
+        ...currentState.defaults,
+        floor: { thickness, typeId: typeId || currentState.defaults.floor.typeId },
+      },
+    };
+    emitChange();
+  },
+
+  setRoofDefaults: (pitch: number, overhang: number, typeId?: string) => {
+    currentState = {
+      ...currentState,
+      defaults: {
+        ...currentState.defaults,
+        roof: { pitch, overhang, typeId: typeId || currentState.defaults.roof.typeId },
+      },
+    };
+    emitChange();
+  },
+
+  addWallType: (type: WallTypeItem) => {
+    currentState = {
+      ...currentState,
+      wallTypes: [...currentState.wallTypes, type],
+    };
+    emitChange();
+  },
+
+  addDoorType: (type: DoorTypeItem) => {
+    currentState = {
+      ...currentState,
+      doorTypes: [...currentState.doorTypes, type],
+    };
+    emitChange();
+  },
+
+  addWindowType: (type: WindowTypeItem) => {
+    currentState = {
+      ...currentState,
+      windowTypes: [...currentState.windowTypes, type],
+    };
+    emitChange();
+  },
+
+  addFloorType: (type: FloorTypeItem) => {
+    currentState = {
+      ...currentState,
+      floorTypes: [...currentState.floorTypes, type],
+    };
+    emitChange();
+  },
+
+  addRoofType: (type: RoofTypeItem) => {
+    currentState = {
+      ...currentState,
+      roofTypes: [...currentState.roofTypes, type],
+    };
+    emitChange();
+  },
+
+  addStairType: (type: StairTypeItem) => {
+    currentState = {
+      ...currentState,
+      stairTypes: [...currentState.stairTypes, type],
+    };
+    emitChange();
+  },
+
+  // Atualizar propriedades de qualquer elemento existente
+  updateElement: (id: string, elementType: string, patch: any) => {
+    const currentClone = structuredClone(currentState.elements);
+    let updated = false;
+
+    const mapList = <T extends { id: string }>(list: T[]): T[] =>
+      list.map((item) => {
+        if (item.id === id) {
+          updated = true;
+          return { ...item, ...patch };
+        }
+        return item;
+      });
+
+    const newElements = {
+      walls: elementType === 'wall' ? mapList(currentState.elements.walls) : currentState.elements.walls,
+      doors: elementType === 'door' ? mapList(currentState.elements.doors) : currentState.elements.doors,
+      windows: elementType === 'window' ? mapList(currentState.elements.windows) : currentState.elements.windows,
+      floors: elementType === 'floor' ? mapList(currentState.elements.floors) : currentState.elements.floors,
+      roofs: elementType === 'roof' ? mapList(currentState.elements.roofs) : currentState.elements.roofs,
+      stairs: elementType === 'stair' ? mapList(currentState.elements.stairs) : currentState.elements.stairs,
+      rooms: elementType === 'room' ? mapList(currentState.elements.rooms) : currentState.elements.rooms,
+      roomSeparators: elementType === 'roomSeparator' ? mapList(currentState.elements.roomSeparators) : currentState.elements.roomSeparators,
+      dimensions: elementType === 'dimension' ? mapList(currentState.elements.dimensions) : currentState.elements.dimensions,
+      sections: elementType === 'section' ? mapList(currentState.elements.sections) : currentState.elements.sections,
+    };
+
+    if (updated) {
+      currentState = {
+        ...currentState,
+        elements: newElements,
+        history: {
+          past: [...currentState.history.past, currentClone],
+          future: [],
+        },
+      };
+      emitChange();
+    }
+  },
+
+  // Remover elemento pelo ID com histórico de desfazer
+  removeElement: (id: string) => {
+    const currentClone = structuredClone(currentState.elements);
+    const filterList = <T extends { id: string }>(list: T[]): T[] => list.filter((item) => item.id !== id);
+
+    currentState = {
+      ...currentState,
+      selectedElementIds: currentState.selectedElementIds.filter((selId) => selId !== id),
+      elements: {
+        walls: filterList(currentState.elements.walls),
+        doors: filterList(currentState.elements.doors),
+        windows: filterList(currentState.elements.windows),
+        floors: filterList(currentState.elements.floors),
+        roofs: filterList(currentState.elements.roofs),
+        stairs: filterList(currentState.elements.stairs),
+        rooms: filterList(currentState.elements.rooms),
+        roomSeparators: filterList(currentState.elements.roomSeparators),
+        dimensions: filterList(currentState.elements.dimensions),
+        sections: filterList(currentState.elements.sections),
+      },
+      history: {
+        past: [...currentState.history.past, currentClone],
+        future: [],
       },
     };
     emitChange();

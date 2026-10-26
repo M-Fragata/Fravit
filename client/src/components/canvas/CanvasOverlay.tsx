@@ -23,6 +23,26 @@ import {
 } from '../../cad-core/geometry/wallGeometry';
 import { drawRevitDimension } from '../../cad-core/geometry/revitDimension';
 
+function distToSegment(p: Point2D, v: Point2D, w: Point2D): number {
+  const l2 = (w.x - v.x) ** 2 + (w.y - v.y) ** 2;
+  if (l2 === 0) return distance(p, v);
+  let t = ((p.x - v.x) * (w.x - v.x) + (p.y - v.y) * (w.y - v.y)) / l2;
+  t = Math.max(0, Math.min(1, t));
+  return distance(p, { x: v.x + t * (w.x - v.x), y: v.y + t * (w.y - v.y) });
+}
+
+function isPointInsidePolygon(p: Point2D, poly: Point2D[]): boolean {
+  if (!poly || poly.length < 3) return false;
+  let inside = false;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    const xi = poly[i].x, yi = poly[i].y;
+    const xj = poly[j].x, yj = poly[j].y;
+    const intersect = yi > p.y !== yj > p.y && p.x < ((xj - xi) * (p.y - yi)) / (yj - yi) + xi;
+    if (intersect) inside = !inside;
+  }
+  return inside;
+}
+
 interface CanvasOverlayProps {
   panRef: React.MutableRefObject<Point2D>;
   zoomRef: React.MutableRefObject<number>;
@@ -42,7 +62,7 @@ export const CanvasOverlay: React.FC<CanvasOverlayProps> = ({
 }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const state = useBIM();
-  const { activeTool, activeLevelId, elements, snapConfig, defaults } = state;
+  const { activeTool, drawMode, activeLevelId, elements, snapConfig, defaults, selectedElementIds } = state;
 
   // Estados de desenho interativo
   const [drawingStart, setDrawingStart] = useState<Point2D | null>(null);
@@ -477,46 +497,169 @@ export const CanvasOverlay: React.FC<CanvasOverlayProps> = ({
       });
 
       // ==========================================
+      // I.B ELEMENTOS SELECIONADOS (Revit Selection Highlight)
+      // ==========================================
+      if (selectedElementIds && selectedElementIds.length > 0) {
+        ctx.save();
+        // 1. Paredes Selecionadas
+        elements.walls.forEach((wall) => {
+          if (!selectedElementIds.includes(wall.id)) return;
+          const s = worldToScreen(wall.start.x, wall.start.y);
+          const e = worldToScreen(wall.end.x, wall.end.y);
+          ctx.beginPath();
+          ctx.moveTo(s.x, s.y);
+          ctx.lineTo(e.x, e.y);
+          ctx.strokeStyle = 'rgba(56, 189, 248, 0.5)';
+          ctx.lineWidth = Math.max(8, wall.thickness * zoom + 10);
+          ctx.lineCap = 'round';
+          ctx.stroke();
+
+          // Grips azuis nas extremidades
+          [s, e].forEach((pt) => {
+            ctx.fillStyle = '#2563eb';
+            ctx.strokeStyle = '#ffffff';
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.arc(pt.x, pt.y, 5, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.stroke();
+          });
+        });
+
+        // 2. Separadores Selecionados
+        elements.roomSeparators.forEach((sep) => {
+          if (!selectedElementIds.includes(sep.id)) return;
+          const s = worldToScreen(sep.start.x, sep.start.y);
+          const e = worldToScreen(sep.end.x, sep.end.y);
+          ctx.beginPath();
+          ctx.moveTo(s.x, s.y);
+          ctx.lineTo(e.x, e.y);
+          ctx.strokeStyle = '#38bdf8';
+          ctx.lineWidth = 4;
+          ctx.stroke();
+        });
+
+        // 3. Pisos Selecionados
+        elements.floors.forEach((fl) => {
+          if (!selectedElementIds.includes(fl.id) || fl.polygon.length < 3) return;
+          ctx.beginPath();
+          const first = worldToScreen(fl.polygon[0].x, fl.polygon[0].y);
+          ctx.moveTo(first.x, first.y);
+          for (let i = 1; i < fl.polygon.length; i++) {
+            const pt = worldToScreen(fl.polygon[i].x, fl.polygon[i].y);
+            ctx.lineTo(pt.x, pt.y);
+          }
+          ctx.closePath();
+          ctx.fillStyle = 'rgba(56, 189, 248, 0.15)';
+          ctx.fill();
+          ctx.strokeStyle = '#38bdf8';
+          ctx.lineWidth = 2.5;
+          ctx.stroke();
+        });
+
+        // 4. Ambientes Selecionados
+        elements.rooms.forEach((rm) => {
+          if (!selectedElementIds.includes(rm.id) || rm.polygon.length < 3) return;
+          ctx.beginPath();
+          const first = worldToScreen(rm.polygon[0].x, rm.polygon[0].y);
+          ctx.moveTo(first.x, first.y);
+          for (let i = 1; i < rm.polygon.length; i++) {
+            const pt = worldToScreen(rm.polygon[i].x, rm.polygon[i].y);
+            ctx.lineTo(pt.x, pt.y);
+          }
+          ctx.closePath();
+          ctx.fillStyle = 'rgba(37, 99, 235, 0.2)';
+          ctx.fill();
+          ctx.strokeStyle = '#2563eb';
+          ctx.lineWidth = 2.5;
+          ctx.stroke();
+        });
+
+        ctx.restore();
+      }
+
+      // ==========================================
       // II. FEEDBACK INTERATIVO DA FERRAMENTA ATIVA
       // ==========================================
 
-      // A. Ferramenta PAREDE (Linha Elástica e Cotas Dinâmicas)
+      // A. Ferramenta PAREDE (Linha Elástica ou Retângulo e Cotas Dinâmicas)
       if (drawingStart && activeTool === 'wall' && snapped) {
-        const screenStart = worldToScreen(drawingStart.x, drawingStart.y);
-        const screenSnap = worldToScreen(snapped.x, snapped.y);
+        if (drawMode === 'rectangle') {
+          // Preview Retangular de Parede (4 Paredes)
+          const p1 = worldToScreen(drawingStart.x, drawingStart.y);
+          const p2 = worldToScreen(snapped.x, drawingStart.y);
+          const p3 = worldToScreen(snapped.x, snapped.y);
+          const p4 = worldToScreen(drawingStart.x, snapped.y);
 
-        ctx.beginPath();
-        ctx.moveTo(screenStart.x, screenStart.y);
-        ctx.lineTo(screenSnap.x, screenSnap.y);
-        ctx.strokeStyle = '#38bdf8';
-        ctx.lineWidth = Math.max(3, defaults.wall.thickness * zoom);
-        ctx.lineCap = 'round';
-        ctx.stroke();
+          ctx.save();
+          ctx.beginPath();
+          ctx.moveTo(p1.x, p1.y);
+          ctx.lineTo(p2.x, p2.y);
+          ctx.lineTo(p3.x, p3.y);
+          ctx.lineTo(p4.x, p4.y);
+          ctx.closePath();
+          ctx.strokeStyle = '#38bdf8';
+          ctx.lineWidth = Math.max(3, defaults.wall.thickness * zoom);
+          ctx.stroke();
 
-        const distMeters = distance(drawingStart, snapped);
-        const midX = (screenStart.x + screenSnap.x) / 2;
-        const midY = (screenStart.y + screenSnap.y) / 2;
+          // Medidas do retângulo
+          const dxM = Math.abs(snapped.x - drawingStart.x);
+          const dyM = Math.abs(snapped.y - drawingStart.y);
+          const midRx = (p1.x + p3.x) / 2;
+          const midRy = (p1.y + p3.y) / 2;
+          const rLabel = `${dxM.toFixed(2)} m x ${dyM.toFixed(2)} m (Caixa de Paredes)`;
+          ctx.font = '700 12px "JetBrains Mono", monospace';
+          const rLw = ctx.measureText(rLabel).width;
+          ctx.fillStyle = 'rgba(12, 16, 23, 0.95)';
+          ctx.strokeStyle = '#38bdf8';
+          ctx.lineWidth = 1.2;
+          ctx.beginPath();
+          ctx.roundRect(midRx - rLw / 2 - 8, midRy - 12, rLw + 16, 24, 4);
+          ctx.fill();
+          ctx.stroke();
+          ctx.fillStyle = '#38bdf8';
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          ctx.fillText(rLabel, midRx, midRy);
+          ctx.restore();
+        } else {
+          // Preview de Linha de Parede Contínua
+          const screenStart = worldToScreen(drawingStart.x, drawingStart.y);
+          const screenSnap = worldToScreen(snapped.x, snapped.y);
 
-        const hasPolarAngle = currentSnapped?.polarAngle !== undefined;
-        const label = hasPolarAngle
-          ? `${distMeters.toFixed(2)} m  ∠ ${currentSnapped.polarAngle}°`
-          : `${distMeters.toFixed(2)} m`;
+          ctx.beginPath();
+          ctx.moveTo(screenStart.x, screenStart.y);
+          ctx.lineTo(screenSnap.x, screenSnap.y);
+          ctx.strokeStyle = '#38bdf8';
+          ctx.lineWidth = Math.max(3, defaults.wall.thickness * zoom);
+          ctx.lineCap = 'round';
+          ctx.stroke();
 
-        ctx.fillStyle = 'rgba(12, 16, 23, 0.95)';
-        ctx.strokeStyle = hasPolarAngle ? '#10b981' : '#38bdf8';
-        ctx.lineWidth = 1.5;
-        ctx.font = '700 13px "JetBrains Mono", monospace';
-        const textWidth = ctx.measureText(label).width;
+          const distMeters = distance(drawingStart, snapped);
+          const midX = (screenStart.x + screenSnap.x) / 2;
+          const midY = (screenStart.y + screenSnap.y) / 2;
 
-        ctx.beginPath();
-        ctx.roundRect(midX - textWidth / 2 - 10, midY - 26, textWidth + 20, 24, 6);
-        ctx.fill();
-        ctx.stroke();
+          const hasPolarAngle = currentSnapped?.polarAngle !== undefined;
+          const label = hasPolarAngle
+            ? `${distMeters.toFixed(2)} m  ∠ ${currentSnapped.polarAngle}°`
+            : `${distMeters.toFixed(2)} m`;
 
-        ctx.fillStyle = hasPolarAngle ? '#10b981' : '#38bdf8';
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
-        ctx.fillText(label, midX, midY - 14);
+          ctx.fillStyle = 'rgba(12, 16, 23, 0.95)';
+          ctx.strokeStyle = hasPolarAngle ? '#10b981' : '#38bdf8';
+          ctx.lineWidth = 1.5;
+          ctx.font = '700 13px "JetBrains Mono", monospace';
+          const textWidth = ctx.measureText(label).width;
+
+          ctx.beginPath();
+          ctx.roundRect(midX - textWidth / 2 - 10, midY - 26, textWidth + 20, 24, 6);
+          ctx.fill();
+          ctx.stroke();
+
+          ctx.fillStyle = hasPolarAngle ? '#10b981' : '#38bdf8';
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          ctx.fillText(label, midX, midY - 14);
+        }
       }
 
       // B. Ferramenta PORTA (Ghost Preview na Parede mais próxima)
@@ -744,30 +887,143 @@ export const CanvasOverlay: React.FC<CanvasOverlayProps> = ({
         }
       }
 
-      // D. Ferramenta PISO / TELHADO (Polígono em Construção)
-      if ((activeTool === 'floor' || activeTool === 'roof') && polygonPoints.length > 0 && snapped) {
-        ctx.save();
-        ctx.beginPath();
-        const first = worldToScreen(polygonPoints[0].x, polygonPoints[0].y);
-        ctx.moveTo(first.x, first.y);
-        for (let i = 1; i < polygonPoints.length; i++) {
-          const pt = worldToScreen(polygonPoints[i].x, polygonPoints[i].y);
-          ctx.lineTo(pt.x, pt.y);
+      // D. Ferramenta PISO / TELHADO (Polígono ou Retângulo em Construção)
+      if ((activeTool === 'floor' || activeTool === 'roof') && snapped) {
+        if (drawMode === 'rectangle' && drawingStart) {
+          const p1 = worldToScreen(drawingStart.x, drawingStart.y);
+          const p2 = worldToScreen(snapped.x, drawingStart.y);
+          const p3 = worldToScreen(snapped.x, snapped.y);
+          const p4 = worldToScreen(drawingStart.x, snapped.y);
+
+          ctx.save();
+          ctx.beginPath();
+          ctx.moveTo(p1.x, p1.y);
+          ctx.lineTo(p2.x, p2.y);
+          ctx.lineTo(p3.x, p3.y);
+          ctx.lineTo(p4.x, p4.y);
+          ctx.closePath();
+
+          ctx.fillStyle = activeTool === 'floor' ? 'rgba(56, 189, 248, 0.15)' : 'rgba(239, 68, 68, 0.15)';
+          ctx.fill();
+          ctx.strokeStyle = activeTool === 'floor' ? '#38bdf8' : '#ef4444';
+          ctx.lineWidth = 2;
+          ctx.stroke();
+
+          const area = Math.abs(snapped.x - drawingStart.x) * Math.abs(snapped.y - drawingStart.y);
+          const midX = (p1.x + p3.x) / 2;
+          const midY = (p1.y + p3.y) / 2;
+          const label = `${activeTool === 'floor' ? 'Piso' : 'Telhado'} Retangular • ${area.toFixed(2)} m²`;
+
+          ctx.font = '700 12px "JetBrains Mono", monospace';
+          const lw = ctx.measureText(label).width;
+          ctx.fillStyle = 'rgba(12, 16, 23, 0.95)';
+          ctx.strokeStyle = activeTool === 'floor' ? '#38bdf8' : '#ef4444';
+          ctx.lineWidth = 1.2;
+          ctx.beginPath();
+          ctx.roundRect(midX - lw / 2 - 8, midY - 12, lw + 16, 24, 4);
+          ctx.fill();
+          ctx.stroke();
+          ctx.fillStyle = activeTool === 'floor' ? '#38bdf8' : '#ef4444';
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          ctx.fillText(label, midX, midY);
+          ctx.restore();
+        } else if (polygonPoints.length > 0) {
+          ctx.save();
+          ctx.beginPath();
+          const first = worldToScreen(polygonPoints[0].x, polygonPoints[0].y);
+          ctx.moveTo(first.x, first.y);
+          for (let i = 1; i < polygonPoints.length; i++) {
+            const pt = worldToScreen(polygonPoints[i].x, polygonPoints[i].y);
+            ctx.lineTo(pt.x, pt.y);
+          }
+          const snapScreen = worldToScreen(snapped.x, snapped.y);
+          ctx.lineTo(snapScreen.x, snapScreen.y);
+
+          ctx.fillStyle = activeTool === 'floor' ? 'rgba(56, 189, 248, 0.1)' : 'rgba(239, 68, 68, 0.1)';
+          ctx.fill();
+          ctx.strokeStyle = activeTool === 'floor' ? '#38bdf8' : '#ef4444';
+          ctx.lineWidth = 2;
+          ctx.stroke();
+
+          // Marcador no primeiro ponto para fechar o polígono
+          ctx.fillStyle = '#10b981';
+          ctx.beginPath();
+          ctx.arc(first.x, first.y, 6, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.restore();
         }
-        const snapScreen = worldToScreen(snapped.x, snapped.y);
-        ctx.lineTo(snapScreen.x, snapScreen.y);
+      }
 
-        ctx.fillStyle = activeTool === 'floor' ? 'rgba(56, 189, 248, 0.1)' : 'rgba(239, 68, 68, 0.1)';
-        ctx.fill();
-        ctx.strokeStyle = activeTool === 'floor' ? '#38bdf8' : '#ef4444';
-        ctx.lineWidth = 2;
-        ctx.stroke();
+      // D2. Ferramenta SEPARADOR DE AMBIENTE (Linha ou Retângulo)
+      if (activeTool === 'roomSeparator' && drawingStart && snapped) {
+        ctx.save();
+        if (drawMode === 'rectangle') {
+          const p1 = worldToScreen(drawingStart.x, drawingStart.y);
+          const p2 = worldToScreen(snapped.x, drawingStart.y);
+          const p3 = worldToScreen(snapped.x, snapped.y);
+          const p4 = worldToScreen(drawingStart.x, snapped.y);
 
-        // Marcador no primeiro ponto para fechar o polígono
-        ctx.fillStyle = '#10b981';
-        ctx.beginPath();
-        ctx.arc(first.x, first.y, 6, 0, Math.PI * 2);
-        ctx.fill();
+          ctx.beginPath();
+          ctx.moveTo(p1.x, p1.y);
+          ctx.lineTo(p2.x, p2.y);
+          ctx.lineTo(p3.x, p3.y);
+          ctx.lineTo(p4.x, p4.y);
+          ctx.closePath();
+          ctx.strokeStyle = '#ec4899';
+          ctx.lineWidth = 2;
+          ctx.setLineDash([8, 4, 2, 4]);
+          ctx.stroke();
+
+          const area = Math.abs(snapped.x - drawingStart.x) * Math.abs(snapped.y - drawingStart.y);
+          const midX = (p1.x + p3.x) / 2;
+          const midY = (p1.y + p3.y) / 2;
+          const label = `Separador Retangular • ${area.toFixed(2)} m² (4 Divisões)`;
+
+          ctx.font = '700 11px "JetBrains Mono", monospace';
+          const lw = ctx.measureText(label).width;
+          ctx.fillStyle = 'rgba(12, 16, 23, 0.95)';
+          ctx.strokeStyle = '#ec4899';
+          ctx.lineWidth = 1;
+          ctx.beginPath();
+          ctx.roundRect(midX - lw / 2 - 8, midY - 12, lw + 16, 24, 4);
+          ctx.fill();
+          ctx.stroke();
+          ctx.fillStyle = '#ec4899';
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          ctx.fillText(label, midX, midY);
+        } else {
+          const s = worldToScreen(drawingStart.x, drawingStart.y);
+          const e = worldToScreen(snapped.x, snapped.y);
+
+          ctx.beginPath();
+          ctx.moveTo(s.x, s.y);
+          ctx.lineTo(e.x, e.y);
+          ctx.strokeStyle = '#ec4899';
+          ctx.lineWidth = 2;
+          ctx.setLineDash([8, 4, 2, 4]);
+          ctx.stroke();
+
+          const dist = distance(drawingStart, snapped);
+          const midX = (s.x + e.x) / 2;
+          const midY = (s.y + e.y) / 2;
+          const label = `Separador de Ambiente • ${dist.toFixed(2)} m`;
+
+          ctx.font = '700 11px "JetBrains Mono", monospace';
+          const lw = ctx.measureText(label).width;
+          ctx.fillStyle = 'rgba(12, 16, 23, 0.95)';
+          ctx.strokeStyle = '#ec4899';
+          ctx.lineWidth = 1;
+          ctx.beginPath();
+          ctx.roundRect(midX - lw / 2 - 8, midY - 12, lw + 16, 24, 4);
+          ctx.fill();
+          ctx.stroke();
+          ctx.fillStyle = '#ec4899';
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          ctx.fillText(label, midX, midY);
+        }
         ctx.restore();
       }
 
@@ -1191,8 +1447,25 @@ export const CanvasOverlay: React.FC<CanvasOverlayProps> = ({
         setNumericInput('');
         setDimP1(null);
         setDimP2(null);
+        setSecP1(null);
+        setSecP2(null);
+        bimStore.clearSelection();
         bimStore.setActiveTool('select');
         return;
+      }
+
+      // Tecla Delete / Backspace: Exclui elementos selecionados se não estiver digitando em campo de texto
+      if (e.key === 'Delete' || e.key === 'Backspace') {
+        if (state.selectedElementIds.length > 0) {
+          const activeEl = document.activeElement;
+          const isInput = activeEl && ['INPUT', 'TEXTAREA', 'SELECT'].includes(activeEl.tagName);
+          if (!isInput) {
+            e.preventDefault();
+            state.selectedElementIds.forEach((id) => bimStore.removeElement(id));
+            bimStore.clearSelection();
+            return;
+          }
+        }
       }
 
       // Desfazer: Ctrl+Z
@@ -1245,18 +1518,6 @@ export const CanvasOverlay: React.FC<CanvasOverlayProps> = ({
         }
       }
 
-      if (e.key === 'Escape') {
-        setDrawingStart(null);
-        setPolygonPoints([]);
-        setNumericInput('');
-        setDimP1(null);
-        setDimP2(null);
-        setSecP1(null);
-        setSecP2(null);
-        bimStore.setActiveTool('select');
-        return;
-      }
-
       if (e.code === 'Space') {
         if (activeTool === 'door') {
           e.preventDefault();
@@ -1292,7 +1553,7 @@ export const CanvasOverlay: React.FC<CanvasOverlayProps> = ({
       }
 
       // Entrada numérica direta ao desenhar paredes
-      if (drawingStart && activeTool === 'wall') {
+      if (drawingStart && activeTool === 'wall' && drawMode === 'line') {
         if ((e.key >= '0' && e.key <= '9') || e.key === '.' || e.key === ',') {
           const char = e.key === ',' ? '.' : e.key;
           setNumericInput((prev) => prev + char);
@@ -1350,6 +1611,7 @@ export const CanvasOverlay: React.FC<CanvasOverlayProps> = ({
     currentSnapped,
     numericInput,
     activeTool,
+    drawMode,
     defaults,
     activeLevelId,
     doorFlipFacing,
@@ -1378,26 +1640,157 @@ export const CanvasOverlay: React.FC<CanvasOverlayProps> = ({
       const clickPoint = currentSnapped.point;
       const rawWorld = rawWorldMouseRef.current;
 
+      // 0. SELEÇÃO / INSPEÇÃO (Select)
+      if (activeTool === 'select') {
+        const p = rawWorld;
+        let foundId: string | null = null;
+
+        // A. Checa Portas
+        for (const door of elements.doors) {
+          const host = elements.walls.find((w) => w.id === door.wallId);
+          if (!host) continue;
+          const dx = host.end.x - host.start.x;
+          const dy = host.end.y - host.start.y;
+          const len = Math.hypot(dx, dy);
+          if (len < 0.05) continue;
+          const cx = host.start.x + (dx / len) * (door.offsetRatio * len);
+          const cy = host.start.y + (dy / len) * (door.offsetRatio * len);
+          if (distance(p, { x: cx, y: cy }) <= Math.max(0.6, door.width)) {
+            foundId = door.id;
+            break;
+          }
+        }
+
+        // B. Checa Janelas
+        if (!foundId) {
+          for (const win of elements.windows) {
+            const host = elements.walls.find((w) => w.id === win.wallId);
+            if (!host) continue;
+            const dx = host.end.x - host.start.x;
+            const dy = host.end.y - host.start.y;
+            const len = Math.hypot(dx, dy);
+            if (len < 0.05) continue;
+            const cx = host.start.x + (dx / len) * (win.offsetRatio * len);
+            const cy = host.start.y + (dy / len) * (win.offsetRatio * len);
+            if (distance(p, { x: cx, y: cy }) <= Math.max(0.6, win.width)) {
+              foundId = win.id;
+              break;
+            }
+          }
+        }
+
+        // C. Checa Paredes
+        if (!foundId) {
+          for (const wall of elements.walls) {
+            const d = distToSegment(p, wall.start, wall.end);
+            if (d <= wall.thickness / 2 + 0.25) {
+              foundId = wall.id;
+              break;
+            }
+          }
+        }
+
+        // D. Checa Separadores de Ambiente
+        if (!foundId) {
+          for (const sep of elements.roomSeparators) {
+            const d = distToSegment(p, sep.start, sep.end);
+            if (d <= 0.25) {
+              foundId = sep.id;
+              break;
+            }
+          }
+        }
+
+        // E. Checa Ambientes (Rooms)
+        if (!foundId) {
+          for (const rm of elements.rooms) {
+            if (isPointInsidePolygon(p, rm.polygon)) {
+              foundId = rm.id;
+              break;
+            }
+          }
+        }
+
+        // F. Checa Pisos
+        if (!foundId) {
+          for (const fl of elements.floors) {
+            if (isPointInsidePolygon(p, fl.polygon)) {
+              foundId = fl.id;
+              break;
+            }
+          }
+        }
+
+        // G. Checa Telhados
+        if (!foundId) {
+          for (const rf of elements.roofs) {
+            if (isPointInsidePolygon(p, rf.polygon)) {
+              foundId = rf.id;
+              break;
+            }
+          }
+        }
+
+        // H. Checa Cortes
+        if (!foundId) {
+          for (const sec of elements.sections) {
+            const d = distToSegment(p, sec.start, sec.end);
+            if (d <= 0.35) {
+              foundId = sec.id;
+              break;
+            }
+          }
+        }
+
+        if (foundId) {
+          bimStore.setSelectedElementIds([foundId]);
+        } else {
+          bimStore.clearSelection();
+        }
+        return;
+      }
+
       // 1. PAREDE (Wall)
       if (activeTool === 'wall') {
         if (!drawingStart) {
           setDrawingStart(clickPoint);
           setNumericInput('');
         } else {
-          const length = distance(drawingStart, clickPoint);
-          if (length > 0.05) {
-            const newWall: WallElement = {
-              id: `wall-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
-              type: 'wall',
-              start: { ...drawingStart },
-              end: { ...clickPoint },
-              thickness: defaults.wall.thickness,
-              height: defaults.wall.height,
-              levelId: activeLevelId,
-            };
-            bimStore.addWall(newWall);
+          if (drawMode === 'rectangle') {
+            const x1 = drawingStart.x;
+            const y1 = drawingStart.y;
+            const x2 = clickPoint.x;
+            const y2 = clickPoint.y;
+            if (Math.abs(x2 - x1) > 0.1 && Math.abs(y2 - y1) > 0.1) {
+              const th = defaults.wall.thickness;
+              const h = defaults.wall.height;
+              const lvl = activeLevelId;
+              const w1: WallElement = { id: `wall-${Date.now()}-1`, type: 'wall', start: { x: x1, y: y1 }, end: { x: x2, y: y1 }, thickness: th, height: h, levelId: lvl };
+              const w2: WallElement = { id: `wall-${Date.now()}-2`, type: 'wall', start: { x: x2, y: y1 }, end: { x: x2, y: y2 }, thickness: th, height: h, levelId: lvl };
+              const w3: WallElement = { id: `wall-${Date.now()}-3`, type: 'wall', start: { x: x2, y: y2 }, end: { x: x1, y: y2 }, thickness: th, height: h, levelId: lvl };
+              const w4: WallElement = { id: `wall-${Date.now()}-4`, type: 'wall', start: { x: x1, y: y2 }, end: { x: x1, y: y1 }, thickness: th, height: h, levelId: lvl };
+              bimStore.addWall(w1);
+              bimStore.addWall(w2);
+              bimStore.addWall(w3);
+              bimStore.addWall(w4);
+            }
+            setDrawingStart(null);
+          } else {
+            const length = distance(drawingStart, clickPoint);
+            if (length > 0.05) {
+              const newWall: WallElement = {
+                id: `wall-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
+                type: 'wall',
+                start: { ...drawingStart },
+                end: { ...clickPoint },
+                thickness: defaults.wall.thickness,
+                height: defaults.wall.height,
+                levelId: activeLevelId,
+              };
+              bimStore.addWall(newWall);
+            }
+            setDrawingStart(clickPoint);
           }
-          setDrawingStart(clickPoint);
           setNumericInput('');
         }
         return;
@@ -1444,39 +1837,95 @@ export const CanvasOverlay: React.FC<CanvasOverlayProps> = ({
 
       // 4. PISO / LAJE (Floor)
       if (activeTool === 'floor') {
-        // Se clicar próximo ao primeiro vértice ou tiver mais de 2 pontos e fechar:
-        if (polygonPoints.length >= 2 && distance(clickPoint, polygonPoints[0]) < 0.3) {
-          const newFloor: FloorElement = {
-            id: `floor-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
-            type: 'floor',
-            polygon: [...polygonPoints],
-            thickness: 0.15,
-            elevationOffset: 0.0,
-            levelId: activeLevelId,
-          };
-          bimStore.addFloor(newFloor);
-          setPolygonPoints([]);
+        if (drawMode === 'rectangle') {
+          if (!drawingStart) {
+            setDrawingStart(clickPoint);
+          } else {
+            const x1 = drawingStart.x;
+            const y1 = drawingStart.y;
+            const x2 = clickPoint.x;
+            const y2 = clickPoint.y;
+            if (Math.abs(x2 - x1) > 0.1 && Math.abs(y2 - y1) > 0.1) {
+              const newFloor: FloorElement = {
+                id: `floor-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
+                type: 'floor',
+                polygon: [
+                  { x: x1, y: y1 },
+                  { x: x2, y: y1 },
+                  { x: x2, y: y2 },
+                  { x: x1, y: y2 },
+                ],
+                thickness: defaults.floor?.thickness || 0.15,
+                elevationOffset: 0.0,
+                levelId: activeLevelId,
+              };
+              bimStore.addFloor(newFloor);
+            }
+            setDrawingStart(null);
+          }
         } else {
-          setPolygonPoints((prev) => [...prev, clickPoint]);
+          // Modo Polígono Linha
+          if (polygonPoints.length >= 2 && distance(clickPoint, polygonPoints[0]) < 0.3) {
+            const newFloor: FloorElement = {
+              id: `floor-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
+              type: 'floor',
+              polygon: [...polygonPoints],
+              thickness: defaults.floor?.thickness || 0.15,
+              elevationOffset: 0.0,
+              levelId: activeLevelId,
+            };
+            bimStore.addFloor(newFloor);
+            setPolygonPoints([]);
+          } else {
+            setPolygonPoints((prev) => [...prev, clickPoint]);
+          }
         }
         return;
       }
 
       // 5. TELHADO (Roof)
       if (activeTool === 'roof') {
-        if (polygonPoints.length >= 2 && distance(clickPoint, polygonPoints[0]) < 0.3) {
-          const newRoof: RoofElement = {
-            id: `roof-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
-            type: 'roof',
-            polygon: [...polygonPoints],
-            pitch: 10,
-            overhang: 0.6,
-            levelId: activeLevelId,
-          };
-          bimStore.addRoof(newRoof);
-          setPolygonPoints([]);
+        if (drawMode === 'rectangle') {
+          if (!drawingStart) {
+            setDrawingStart(clickPoint);
+          } else {
+            const x1 = drawingStart.x;
+            const y1 = drawingStart.y;
+            const x2 = clickPoint.x;
+            const y2 = clickPoint.y;
+            if (Math.abs(x2 - x1) > 0.1 && Math.abs(y2 - y1) > 0.1) {
+              const newRoof: RoofElement = {
+                id: `roof-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
+                type: 'roof',
+                polygon: [
+                  { x: x1, y: y1 },
+                  { x: x2, y: y1 },
+                  { x: x2, y: y2 },
+                  { x: x1, y: y2 },
+                ],
+                pitch: defaults.roof?.pitch || 10,
+                overhang: defaults.roof?.overhang || 0.6,
+                levelId: activeLevelId,
+              };
+              bimStore.addRoof(newRoof);
+            }
+            setDrawingStart(null);
+          }
         } else {
-          setPolygonPoints((prev) => [...prev, clickPoint]);
+          if (polygonPoints.length >= 2 && distance(clickPoint, polygonPoints[0]) < 0.3) {
+            const newRoof: RoofElement = {
+              id: `roof-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
+              type: 'roof',
+              polygon: [...polygonPoints],
+              pitch: defaults.roof?.pitch || 10,
+              overhang: defaults.roof?.overhang || 0.6,
+              levelId: activeLevelId,
+            };
+            bimStore.addRoof(newRoof);
+            setPolygonPoints([]);
+          } else {
+            setPolygonPoints((prev) => [...prev, clickPoint]);
+          }
         }
         return;
       }
@@ -1526,18 +1975,42 @@ export const CanvasOverlay: React.FC<CanvasOverlayProps> = ({
 
       // 8. SEPARADOR DE AMBIENTE (Room Separator)
       if (activeTool === 'roomSeparator') {
-        if (!drawingStart) {
-          setDrawingStart(clickPoint);
+        if (drawMode === 'rectangle') {
+          if (!drawingStart) {
+            setDrawingStart(clickPoint);
+          } else {
+            const x1 = drawingStart.x;
+            const y1 = drawingStart.y;
+            const x2 = clickPoint.x;
+            const y2 = clickPoint.y;
+            if (Math.abs(x2 - x1) > 0.1 && Math.abs(y2 - y1) > 0.1) {
+              const lvl = activeLevelId;
+              const sep1: RoomSeparatorElement = { id: `sep-${Date.now()}-1`, type: 'roomSeparator', start: { x: x1, y: y1 }, end: { x: x2, y: y1 }, levelId: lvl };
+              const sep2: RoomSeparatorElement = { id: `sep-${Date.now()}-2`, type: 'roomSeparator', start: { x: x2, y: y1 }, end: { x: x2, y: y2 }, levelId: lvl };
+              const sep3: RoomSeparatorElement = { id: `sep-${Date.now()}-3`, type: 'roomSeparator', start: { x: x2, y: y2 }, end: { x: x1, y: y2 }, levelId: lvl };
+              const sep4: RoomSeparatorElement = { id: `sep-${Date.now()}-4`, type: 'roomSeparator', start: { x: x1, y: y2 }, end: { x: x1, y: y1 }, levelId: lvl };
+              bimStore.addRoomSeparator(sep1);
+              bimStore.addRoomSeparator(sep2);
+              bimStore.addRoomSeparator(sep3);
+              bimStore.addRoomSeparator(sep4);
+            }
+            setDrawingStart(null);
+          }
         } else {
-          const newSep: RoomSeparatorElement = {
-            id: `sep-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
-            type: 'roomSeparator',
-            start: { ...drawingStart },
-            end: { ...clickPoint },
-            levelId: activeLevelId,
-          };
-          bimStore.addRoomSeparator(newSep);
-          setDrawingStart(null);
+          // Linha individual
+          if (!drawingStart) {
+            setDrawingStart(clickPoint);
+          } else {
+            const newSep: RoomSeparatorElement = {
+              id: `sep-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
+              type: 'roomSeparator',
+              start: { ...drawingStart },
+              end: { ...clickPoint },
+              levelId: activeLevelId,
+            };
+            bimStore.addRoomSeparator(newSep);
+            setDrawingStart(null);
+          }
         }
         return;
       }
