@@ -326,12 +326,24 @@ export const EditorPreview: React.FC<EditorPreviewProps> = ({ projectId, onBack 
         {/* Barra de Ferramentas CAD à Esquerda */}
         <CADToolbar />
 
-        {/* Navegador de Projeto Lateral */}
+        {/* Painel de Propriedades Paramétricas à Esquerda */}
+        <PropertiesPanel />
+
+        {/* Viewport Central Three.js ou Prancha Técnica Interativa */}
+        <main style={{ flex: 1, position: 'relative', overflow: 'hidden' }}>
+          {activeView === 'sheet' ? (
+            <SheetView />
+          ) : (
+            <CADViewport onCursorMove={(pos) => setCursorPos(pos)} />
+          )}
+        </main>
+
+        {/* Navegador de Projeto Lateral à Direita */}
         <aside
           style={{
             width: '230px',
             background: 'var(--bg-surface)',
-            borderRight: '1px solid var(--border-color)',
+            borderLeft: '1px solid var(--border-color)',
             display: 'flex',
             flexDirection: 'column',
           }}
@@ -755,18 +767,6 @@ export const EditorPreview: React.FC<EditorPreviewProps> = ({ projectId, onBack 
             </div>
           </div>
         </aside>
-
-        {/* Viewport Central Three.js ou Prancha Técnica Interativa */}
-        <main style={{ flex: 1, position: 'relative', overflow: 'hidden' }}>
-          {activeView === 'sheet' ? (
-            <SheetView />
-          ) : (
-            <CADViewport onCursorMove={(pos) => setCursorPos(pos)} />
-          )}
-        </main>
-
-        {/* Painel de Propriedades Paramétricas à Direita */}
-        <PropertiesPanel />
       </div>
 
       {/* Barra de Status Inferior */}

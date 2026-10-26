@@ -81,7 +81,7 @@ export const PropertiesPanel: React.FC = () => {
       style={{
         width: '280px',
         background: 'var(--bg-surface)',
-        borderLeft: '1px solid var(--border-color)',
+        borderRight: '1px solid var(--border-color)',
         display: 'flex',
         flexDirection: 'column',
         zIndex: 10,
