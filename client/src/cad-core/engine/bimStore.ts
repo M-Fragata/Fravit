@@ -20,6 +20,7 @@ export interface BIMState {
   activeLevelId: string;
   activeTool: ToolType;
   activeView: 'plan' | '3d' | 'section' | 'sheet';
+  activeSectionId: string | null;
   selectedElementIds: string[];
   snapConfig: SnapConfig;
 
@@ -58,6 +59,7 @@ const initialBimState: BIMState = {
   activeLevelId: 'lvl-ground',
   activeTool: 'select',
   activeView: 'plan',
+  activeSectionId: null,
   selectedElementIds: [],
   snapConfig: {
     gridSnap: true,
@@ -366,6 +368,94 @@ export const bimStore = {
         past: [...currentState.history.past, currentClone],
         future: [],
       },
+    };
+    emitChange();
+  },
+
+  // Adição de Cota Alinhada (Dimension)
+  addDimension: (dim: DimensionElement) => {
+    const currentClone = structuredClone(currentState.elements);
+    const newElements = {
+      ...currentState.elements,
+      dimensions: [...currentState.elements.dimensions, dim],
+    };
+    currentState = {
+      ...currentState,
+      elements: newElements,
+      history: {
+        past: [...currentState.history.past, currentClone],
+        future: [],
+      },
+    };
+    emitChange();
+  },
+
+  // Adição de Linha de Corte (Section)
+  addSection: (sec: SectionElement) => {
+    const currentClone = structuredClone(currentState.elements);
+    const newElements = {
+      ...currentState.elements,
+      sections: [...currentState.elements.sections, sec],
+    };
+    currentState = {
+      ...currentState,
+      elements: newElements,
+      activeSectionId: sec.id,
+      history: {
+        past: [...currentState.history.past, currentClone],
+        future: [],
+      },
+    };
+    emitChange();
+  },
+
+  setActiveSectionId: (id: string | null) => {
+    currentState = {
+      ...currentState,
+      activeSectionId: id,
+    };
+    emitChange();
+  },
+
+  // Gerenciamento de Níveis / Andares
+  addLevel: (name: string, elevation: number, height: number = 2.8) => {
+    const newLevel: BIMLevel = {
+      id: `lvl-${Date.now()}`,
+      name,
+      elevation,
+      height,
+    };
+    // Ordena os níveis por elevação crescente
+    const nextLevels = [...currentState.levels, newLevel].sort((a, b) => a.elevation - b.elevation);
+    currentState = {
+      ...currentState,
+      levels: nextLevels,
+      activeLevelId: newLevel.id,
+    };
+    emitChange();
+  },
+
+  updateLevel: (levelId: string, updates: Partial<BIMLevel>) => {
+    const nextLevels = currentState.levels
+      .map((lvl) => (lvl.id === levelId ? { ...lvl, ...updates } : lvl))
+      .sort((a, b) => a.elevation - b.elevation);
+    currentState = {
+      ...currentState,
+      levels: nextLevels,
+    };
+    emitChange();
+  },
+
+  removeLevel: (levelId: string) => {
+    if (currentState.levels.length <= 1) {
+      alert('O projeto precisa ter pelo menos um nível!');
+      return;
+    }
+    const nextLevels = currentState.levels.filter((lvl) => lvl.id !== levelId);
+    currentState = {
+      ...currentState,
+      levels: nextLevels,
+      activeLevelId: currentState.activeLevelId === levelId ? nextLevels[0].id : currentState.activeLevelId,
     };
     emitChange();
   },

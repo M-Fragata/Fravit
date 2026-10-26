@@ -15,6 +15,8 @@ import {
   Square,
   Layers,
   Scissors,
+  Plus,
+  Trash2,
 } from 'lucide-react';
 
 interface EditorPreviewProps {
@@ -27,7 +29,7 @@ export const EditorPreview: React.FC<EditorPreviewProps> = ({ projectId, onBack 
   const [loading, setLoading] = useState(true);
   const [cursorPos, setCursorPos] = useState<Point2D>({ x: 0, y: 0 });
 
-  const { activeView, levels, activeLevelId, elements } = useBIM();
+  const { activeView, levels, activeLevelId, elements, activeSectionId } = useBIM();
 
   useEffect(() => {
     let isMounted = true;
@@ -333,19 +335,56 @@ export const EditorPreview: React.FC<EditorPreviewProps> = ({ projectId, onBack 
           </div>
 
           <div style={{ padding: 12, overflowY: 'auto', flex: 1, display: 'flex', flexDirection: 'column', gap: 16 }}>
+            {/* Plantas de Piso / Gerenciador de Níveis */}
             <div>
-              <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--cad-cyan)', textTransform: 'uppercase', marginBottom: 8 }}>
-                Plantas de Piso
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+                <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--cad-cyan)', textTransform: 'uppercase' }}>
+                  Plantas de Piso
+                </span>
+                <button
+                  onClick={() => {
+                    const nextNum = levels.length + 1;
+                    const name = window.prompt('Nome do novo nível:', `Pavimento ${nextNum}`);
+                    if (!name) return;
+                    const defaultElev = levels.length > 0 ? (levels[levels.length - 1].elevation + 2.80).toFixed(2) : '2.80';
+                    const elevStr = window.prompt('Elevação em metros (ex: 2.80):', defaultElev);
+                    if (elevStr === null) return;
+                    const elev = parseFloat(elevStr.replace(',', '.')) || 0;
+                    bimStore.addLevel(name, elev);
+                  }}
+                  title="Criar novo nível / andar"
+                  style={{
+                    background: 'rgba(37, 99, 235, 0.15)',
+                    border: '1px solid rgba(37, 99, 235, 0.3)',
+                    color: 'var(--cad-blue)',
+                    cursor: 'pointer',
+                    padding: '2px 5px',
+                    borderRadius: '4px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    fontSize: '11px',
+                    gap: 3,
+                  }}
+                >
+                  <Plus size={12} />
+                  <span>Nível</span>
+                </button>
               </div>
+
               {levels.map((lvl) => (
                 <div
                   key={lvl.id}
-                  onClick={() => bimStore.setActiveLevelId(lvl.id)}
+                  onClick={() => {
+                    bimStore.setActiveLevelId(lvl.id);
+                    if (activeView === 'section') {
+                      bimStore.setActiveView('plan');
+                    }
+                  }}
                   style={{
-                    padding: '8px 12px',
+                    padding: '8px 10px',
                     borderRadius: 'var(--radius-sm)',
-                    background: activeLevelId === lvl.id ? 'rgba(37, 99, 235, 0.15)' : 'transparent',
-                    border: `1px solid ${activeLevelId === lvl.id ? 'var(--cad-blue)' : 'transparent'}`,
+                    background: activeLevelId === lvl.id && activeView !== 'section' ? 'rgba(37, 99, 235, 0.15)' : 'transparent',
+                    border: `1px solid ${activeLevelId === lvl.id && activeView !== 'section' ? 'var(--cad-blue)' : 'transparent'}`,
                     fontSize: '12px',
                     cursor: 'pointer',
                     display: 'flex',
@@ -354,23 +393,100 @@ export const EditorPreview: React.FC<EditorPreviewProps> = ({ projectId, onBack 
                     marginBottom: 4,
                   }}
                 >
-                  <span style={{ fontWeight: activeLevelId === lvl.id ? 600 : 400 }}>{lvl.name}</span>
-                  <span style={{ fontSize: '11px', color: 'var(--text-dim)', fontFamily: 'var(--font-mono)' }}>
+                  <span style={{ fontWeight: activeLevelId === lvl.id ? 600 : 400, flex: 1 }}>{lvl.name}</span>
+                  <span style={{ fontSize: '11px', color: 'var(--text-dim)', fontFamily: 'var(--font-mono)', marginRight: 6 }}>
                     +{lvl.elevation.toFixed(2)}m
                   </span>
+                  {levels.length > 1 && (
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        if (window.confirm(`Deseja realmente remover o nível "${lvl.name}"?`)) {
+                          bimStore.removeLevel(lvl.id);
+                        }
+                      }}
+                      title="Excluir nível"
+                      style={{
+                        background: 'transparent',
+                        border: 'none',
+                        color: 'var(--text-dim)',
+                        cursor: 'pointer',
+                        padding: '2px',
+                        borderRadius: '3px',
+                        display: 'flex',
+                        alignItems: 'center',
+                      }}
+                    >
+                      <Trash2 size={12} />
+                    </button>
+                  )}
                 </div>
               ))}
             </div>
 
+            {/* Cortes Paramétricos */}
             <div>
-              <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--cad-cyan)', textTransform: 'uppercase', marginBottom: 8 }}>
-                Cortes
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+                <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--cad-cyan)', textTransform: 'uppercase' }}>
+                  Cortes Paramétricos
+                </span>
+                <button
+                  onClick={() => bimStore.setActiveTool('section')}
+                  title="Criar novo corte (Atalho: SC)"
+                  style={{
+                    background: 'transparent',
+                    border: 'none',
+                    color: 'var(--text-dim)',
+                    cursor: 'pointer',
+                    padding: '2px 4px',
+                    borderRadius: '3px',
+                    display: 'flex',
+                    alignItems: 'center',
+                  }}
+                >
+                  <Plus size={14} />
+                </button>
               </div>
-              <div style={{ fontSize: '12px', color: 'var(--text-dim)', padding: '6px 10px' }}>
-                Corte A-A (Transversal)
-              </div>
+
+              {elements.sections.length === 0 ? (
+                <div style={{ fontSize: '11px', color: 'var(--text-dim)', padding: '6px 8px', lineHeight: 1.4 }}>
+                  Nenhum corte.<br />
+                  Pressione <strong style={{ color: 'var(--cad-cyan)' }}>SC</strong> para criar.
+                </div>
+              ) : (
+                elements.sections.map((sec) => {
+                  const isCurrent = activeView === 'section' && activeSectionId === sec.id;
+                  return (
+                    <div
+                      key={sec.id}
+                      onClick={() => {
+                        bimStore.setActiveSectionId(sec.id);
+                        bimStore.setActiveView('section');
+                      }}
+                      style={{
+                        padding: '8px 10px',
+                        borderRadius: 'var(--radius-sm)',
+                        background: isCurrent ? 'rgba(56, 189, 248, 0.15)' : 'transparent',
+                        border: `1px solid ${isCurrent ? 'var(--cad-cyan)' : 'transparent'}`,
+                        fontSize: '12px',
+                        cursor: 'pointer',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        marginBottom: 4,
+                      }}
+                    >
+                      <span style={{ fontWeight: isCurrent ? 600 : 400, color: isCurrent ? 'var(--cad-cyan)' : 'inherit' }}>
+                        Corte {sec.name || 'A-A'}
+                      </span>
+                      <Scissors size={12} style={{ color: isCurrent ? 'var(--cad-cyan)' : 'var(--text-dim)' }} />
+                    </div>
+                  );
+                })
+              )}
             </div>
 
+            {/* Pranchas de Impressão */}
             <div>
               <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--cad-cyan)', textTransform: 'uppercase', marginBottom: 8 }}>
                 Pranchas de Impressão

@@ -20,7 +20,7 @@ export const CADViewport: React.FC<CADViewportProps> = ({ onCursorMove }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const threeMountRef = useRef<HTMLDivElement>(null);
   const state = useBIM();
-  const { activeView, elements } = state;
+  const { activeView, elements, levels, activeSectionId } = state;
 
   // Refs mutáveis para garantir sincronização de alta precisão entre Three.js e CanvasOverlay (evitando closure staleness)
   const panRef = useRef<Point2D>({ x: 0, y: 0 });
@@ -46,6 +46,11 @@ export const CADViewport: React.FC<CADViewportProps> = ({ onCursorMove }) => {
     isDragging: false,
     lastMouse: { x: 0, y: 0 },
   });
+
+  const getLevelElevation = (levelId?: string): number => {
+    const lvl = levels.find((l) => l.id === levelId);
+    return lvl ? lvl.elevation : 0;
+  };
 
   // 1. Inicializar Three.js Engine
   useEffect(() => {
@@ -145,6 +150,35 @@ export const CADViewport: React.FC<CADViewportProps> = ({ onCursorMove }) => {
         perspCam.position.z = o.target.z + o.radius * Math.cos(o.phi);
         perspCam.lookAt(o.target);
         renderer.render(scene, perspCam);
+      } else if (activeView === 'section') {
+        const currentSec = elements.sections.find((s) => s.id === activeSectionId) || elements.sections[0];
+        if (currentSec) {
+          const sDx = currentSec.end.x - currentSec.start.x;
+          const sDy = currentSec.end.y - currentSec.start.y;
+          const sLen = Math.sqrt(sDx * sDx + sDy * sDy) || 1;
+          const sNx = -sDy / sLen;
+          const sNy = sDx / sLen;
+          const sMidX = (currentSec.start.x + currentSec.end.x) / 2;
+          const sMidY = (currentSec.start.y + currentSec.end.y) / 2;
+
+          const curHeight = containerRef.current?.clientHeight || 600;
+          const curWidth = containerRef.current?.clientWidth || 800;
+          const curAspect = curWidth / curHeight;
+          const fSize = Math.max(sLen * 1.5, 6);
+
+          orthoCam.left = (-fSize * curAspect) / 2;
+          orthoCam.right = (fSize * curAspect) / 2;
+          orthoCam.top = fSize / 2;
+          orthoCam.bottom = -fSize / 2;
+          orthoCam.position.set(sMidX + sNx * 50, sMidY + sNy * 50, 1.8);
+          orthoCam.lookAt(sMidX, sMidY, 1.8);
+          orthoCam.up.set(0, 0, 1);
+          orthoCam.updateProjectionMatrix();
+
+          renderer.render(scene, orthoCam);
+        } else {
+          renderer.render(scene, orthoCam);
+        }
       } else {
         // Atualiza a câmera ortográfica 2D dinamicamente com base nas refs (sem atraso de closure)
         const pan = panRef.current;
@@ -160,6 +194,7 @@ export const CADViewport: React.FC<CADViewportProps> = ({ onCursorMove }) => {
         orthoCam.bottom = -fSize / 2;
         orthoCam.position.set(pan.x, pan.y, 200);
         orthoCam.lookAt(pan.x, pan.y, 0);
+        orthoCam.up.set(0, 1, 0);
         orthoCam.updateProjectionMatrix();
 
         renderer.render(scene, orthoCam);
@@ -215,7 +250,49 @@ export const CADViewport: React.FC<CADViewportProps> = ({ onCursorMove }) => {
       }
     }
 
-    const is3D = activeView === '3d';
+    const is3D = activeView === '3d' || activeView === 'section';
+
+    // Fatiamento Dinâmico de Corte (Clipping Plane Three.js) e Linhas de Nível NBR
+    const currentSection = elements.sections.find((s) => s.id === activeSectionId) || elements.sections[0];
+    if (activeView === 'section' && currentSection && rendererRef.current) {
+      const sDx = currentSection.end.x - currentSection.start.x;
+      const sDy = currentSection.end.y - currentSection.start.y;
+      const sLen = Math.sqrt(sDx * sDx + sDy * sDy) || 1;
+      const sNx = -sDy / sLen;
+      const sNy = sDx / sLen;
+      const sMidX = (currentSection.start.x + currentSection.end.x) / 2;
+      const sMidY = (currentSection.start.y + currentSection.end.y) / 2;
+
+      const clipPlane = new THREE.Plane();
+      clipPlane.setFromNormalAndCoplanarPoint(
+        new THREE.Vector3(-sNx, -sNy, 0),
+        new THREE.Vector3(sMidX, sMidY, 0)
+      );
+      rendererRef.current.clippingPlanes = [clipPlane];
+
+      // Linhas de Nível no Corte com Traço e Altura em Metros
+      levels.forEach((lvl) => {
+        const lineSpan = Math.max(sLen * 2, 20);
+        const uX = sDx / sLen;
+        const uY = sDy / sLen;
+
+        const p1 = new THREE.Vector3(sMidX - uX * lineSpan, sMidY - uY * lineSpan, lvl.elevation);
+        const p2 = new THREE.Vector3(sMidX + uX * lineSpan, sMidY + uY * lineSpan, lvl.elevation);
+
+        const lvlGeom = new THREE.BufferGeometry().setFromPoints([p1, p2]);
+        const lvlMat = new THREE.LineDashedMaterial({
+          color: 0x38bdf8,
+          dashSize: 0.6,
+          gapSize: 0.3,
+          linewidth: 1.5,
+        });
+        const lvlLine = new THREE.Line(lvlGeom, lvlMat);
+        lvlLine.computeLineDistances();
+        group.add(lvlLine);
+      });
+    } else if (rendererRef.current) {
+      rendererRef.current.clippingPlanes = [];
+    }
 
     // Materiais Técnicos
     const wall3DMaterial = new THREE.MeshStandardMaterial({
@@ -287,7 +364,7 @@ export const CADViewport: React.FC<CADViewportProps> = ({ onCursorMove }) => {
       return mesh;
     };
 
-    // A. PISOS / LAJES (Floors)
+    // A. PISOS / LAJES (Floors) com Elevação por Nível
     elements.floors.forEach((fl) => {
       if (fl.polygon.length < 3) return;
       const shape = new THREE.Shape();
@@ -300,7 +377,8 @@ export const CADViewport: React.FC<CADViewportProps> = ({ onCursorMove }) => {
       const thickness = fl.thickness || 0.15;
       const extrudeSettings = { depth: thickness, bevelEnabled: false };
       const geom = new THREE.ExtrudeGeometry(shape, extrudeSettings);
-      const elev = (fl.elevationOffset || 0) - (is3D ? thickness : 0.05);
+      const baseElev = is3D ? getLevelElevation(fl.levelId) : 0;
+      const elev = baseElev + (fl.elevationOffset || 0) - (is3D ? thickness : 0.05);
 
       const mesh = new THREE.Mesh(geom, floorMaterial);
       mesh.position.set(0, 0, elev);
@@ -312,7 +390,7 @@ export const CADViewport: React.FC<CADViewportProps> = ({ onCursorMove }) => {
       group.add(mesh);
     });
 
-    // B. TELHADOS / COBERTURAS (Roofs)
+    // B. TELHADOS / COBERTURAS (Roofs) com Elevação por Nível
     elements.roofs.forEach((rf) => {
       if (rf.polygon.length < 3) return;
       const shape = new THREE.Shape();
@@ -322,9 +400,11 @@ export const CADViewport: React.FC<CADViewportProps> = ({ onCursorMove }) => {
       }
       shape.closePath();
 
-      const geom = new THREE.ExtrudeGeometry(shape, { depth: 0.2, bevelEnabled: false });
+      const thickness = 0.2;
+      const geom = new THREE.ExtrudeGeometry(shape, { depth: thickness, bevelEnabled: false });
+      const baseElev = is3D ? getLevelElevation(rf.levelId) : 0;
       const mesh = new THREE.Mesh(geom, roofMaterial);
-      mesh.position.set(0, 0, is3D ? 2.8 : 0.1);
+      mesh.position.set(0, 0, baseElev + (is3D ? 2.8 : 0.1));
       mesh.castShadow = is3D;
       mesh.receiveShadow = is3D;
 
@@ -333,7 +413,7 @@ export const CADViewport: React.FC<CADViewportProps> = ({ onCursorMove }) => {
       group.add(mesh);
     });
 
-    // C. ESCADAS PARAMÉTRICAS (Fórmula de Blondel)
+    // C. ESCADAS PARAMÉTRICAS (Fórmula de Blondel) com Elevação por Nível
     elements.stairs.forEach((st) => {
       const dx = st.end.x - st.start.x;
       const dy = st.end.y - st.start.y;
@@ -346,6 +426,7 @@ export const CADViewport: React.FC<CADViewportProps> = ({ onCursorMove }) => {
       const riser = totalRise / steps;
       const stepLength = totalLen / steps;
       const width = st.width || 0.9;
+      const baseElev = is3D ? getLevelElevation(st.levelId) : 0;
 
       for (let s = 0; s < steps; s++) {
         const distFromStart = (s + 0.5) * stepLength;
@@ -358,7 +439,7 @@ export const CADViewport: React.FC<CADViewportProps> = ({ onCursorMove }) => {
           stairMaterial,
           sx,
           sy,
-          is3D ? (riser * (s + 1)) / 2 : 0.02,
+          baseElev + (is3D ? (riser * (s + 1)) / 2 : 0.02),
           angle
         );
       }
@@ -374,6 +455,7 @@ export const CADViewport: React.FC<CADViewportProps> = ({ onCursorMove }) => {
       const angle = Math.atan2(dy, dx);
       const wallHeight = wall.height;
       const wallThickness = wall.thickness;
+      const baseElev = is3D ? getLevelElevation(wall.levelId) : 0;
       const openings = getWallOpenings(wall, elements.doors, elements.windows);
       const solidSegments = getSolidWallSegments(wall, openings);
 
@@ -416,15 +498,15 @@ export const CADViewport: React.FC<CADViewportProps> = ({ onCursorMove }) => {
         // Malha sólida da parede
         const geom = new THREE.BoxGeometry(segLen, wallThickness, is3D ? wallHeight : 0.04);
         const mesh = new THREE.Mesh(geom, is3D ? wall3DMaterial : wall2DMaterial);
-        mesh.position.set(segMidX, segMidY, is3D ? wallHeight / 2 : 0.02);
+        mesh.position.set(segMidX, segMidY, baseElev + (is3D ? wallHeight / 2 : 0.02));
         mesh.rotation.z = angle;
         mesh.castShadow = is3D;
         mesh.receiveShadow = is3D;
         group.add(mesh);
 
         // Arestas Técnicas Abertas (em coordenadas mundiais com recorte das paredes conectadas)
-        const topZ = is3D ? wallHeight : 0.022;
-        const botZ = is3D ? 0.001 : -0.022;
+        const topZ = baseElev + (is3D ? wallHeight : 0.022);
+        const botZ = baseElev + (is3D ? 0.001 : -0.022);
         const edgePoints: THREE.Vector3[] = [];
 
         // Linha longitudinal 1: Lado +halfW (Mundial)
@@ -495,7 +577,7 @@ export const CADViewport: React.FC<CADViewportProps> = ({ onCursorMove }) => {
             // Peitoril da Janela
             if (sillH > 0.02) {
               const sillGeom = new THREE.BoxGeometry(op.width, wallThickness, sillH);
-              addMeshWithEdges(sillGeom, sillMaterial, opCenterX, opCenterY, sillH / 2, angle);
+              addMeshWithEdges(sillGeom, sillMaterial, opCenterX, opCenterY, baseElev + sillH / 2, angle);
             }
 
             // Dintel (Viga acima da janela)
@@ -506,14 +588,14 @@ export const CADViewport: React.FC<CADViewportProps> = ({ onCursorMove }) => {
                 wall3DMaterial,
                 opCenterX,
                 opCenterY,
-                sillH + winH + dintelH / 2,
+                baseElev + sillH + winH + dintelH / 2,
                 angle
               );
             }
 
             // Esquadria da Janela (Frame)
             const frameGeom = new THREE.BoxGeometry(op.width, wallThickness * 0.5, winH);
-            addMeshWithEdges(frameGeom, frameMaterial, opCenterX, opCenterY, sillH + winH / 2, angle);
+            addMeshWithEdges(frameGeom, frameMaterial, opCenterX, opCenterY, baseElev + sillH + winH / 2, angle);
 
             // Vidro Translúcido
             const glassGeom = new THREE.BoxGeometry(
@@ -521,7 +603,7 @@ export const CADViewport: React.FC<CADViewportProps> = ({ onCursorMove }) => {
               0.02,
               Math.max(0.1, winH - 0.08)
             );
-            addMeshWithEdges(glassGeom, glassMaterial, opCenterX, opCenterY, sillH + winH / 2, angle);
+            addMeshWithEdges(glassGeom, glassMaterial, opCenterX, opCenterY, baseElev + sillH + winH / 2, angle);
           } else {
             // Representação 2D da Janela (peitoril + linhas de vidro centrais)
             const sillGeom2D = new THREE.BoxGeometry(op.width, wallThickness, 0.02);
@@ -544,7 +626,7 @@ export const CADViewport: React.FC<CADViewportProps> = ({ onCursorMove }) => {
                 wall3DMaterial,
                 opCenterX,
                 opCenterY,
-                doorH + dintelH / 2,
+                baseElev + doorH + dintelH / 2,
                 angle
               );
             }
@@ -558,8 +640,8 @@ export const CADViewport: React.FC<CADViewportProps> = ({ onCursorMove }) => {
             const ly = wall.start.y + (dy / wallLen) * leftDist;
             const rx = wall.start.x + (dx / wallLen) * rightDist;
             const ry = wall.start.y + (dy / wallLen) * rightDist;
-            addMeshWithEdges(postGeom, frameMaterial, lx, ly, doorH / 2, angle);
-            addMeshWithEdges(postGeom, frameMaterial, rx, ry, doorH / 2, angle);
+            addMeshWithEdges(postGeom, frameMaterial, lx, ly, baseElev + doorH / 2, angle);
+            addMeshWithEdges(postGeom, frameMaterial, rx, ry, baseElev + doorH / 2, angle);
 
             // Folha da Porta (aberta a 75 graus)
             const leafWidth = op.width - postW * 2;
@@ -570,7 +652,7 @@ export const CADViewport: React.FC<CADViewportProps> = ({ onCursorMove }) => {
               doorLeafMaterial,
               lx,
               ly,
-              doorH / 2,
+              baseElev + doorH / 2,
               angle + swingAngle
             );
           } else {
@@ -586,7 +668,10 @@ export const CADViewport: React.FC<CADViewportProps> = ({ onCursorMove }) => {
     elements.floors,
     elements.roofs,
     elements.stairs,
+    elements.sections,
+    levels,
     activeView,
+    activeSectionId,
   ]);
 
   // 3. Listener nativo de Wheel (sem aviso de passive event listener)

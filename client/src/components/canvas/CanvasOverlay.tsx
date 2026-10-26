@@ -12,6 +12,8 @@ import type {
   StairElement,
   RoomElement,
   RoomSeparatorElement,
+  DimensionElement,
+  SectionElement,
 } from '../../cad-core/types';
 import {
   findNearestHostWall,
@@ -47,6 +49,8 @@ export const CanvasOverlay: React.FC<CanvasOverlayProps> = ({
   const [currentSnapped, setCurrentSnapped] = useState<SnapResult | null>(null);
   const [numericInput, setNumericInput] = useState<string>('');
   const [doorFlipFacing, setDoorFlipFacing] = useState<boolean>(false);
+  const [dimP1, setDimP1] = useState<Point2D | null>(null);
+  const [dimP2, setDimP2] = useState<Point2D | null>(null);
 
   const mousePosScreenRef = useRef<{ x: number; y: number }>({ x: -100, y: -100 });
   const rawWorldMouseRef = useRef<Point2D>({ x: 0, y: 0 });
@@ -342,6 +346,162 @@ export const CanvasOverlay: React.FC<CanvasOverlayProps> = ({
         ctx.fillStyle = '#22c55e';
         ctx.font = '700 10px "JetBrains Mono", monospace';
         ctx.fillText(areaStr, tagScreen.x, tagScreen.y + 12);
+      });
+
+      // H. Cotas Existentes (Dimensions NBR / Revit)
+      elements.dimensions.forEach((dim) => {
+        const dx = dim.end.x - dim.start.x;
+        const dy = dim.end.y - dim.start.y;
+        const len = Math.sqrt(dx * dx + dy * dy);
+        if (len < 0.05) return;
+
+        const ux = dx / len;
+        const uy = dy / len;
+        const nx = -uy;
+        const ny = ux;
+
+        const offset = dim.offset || 0.4;
+
+        // Ponto deslocado da cota
+        const c1World = { x: dim.start.x + nx * offset, y: dim.start.y + ny * offset };
+        const c2World = { x: dim.end.x + nx * offset, y: dim.end.y + ny * offset };
+
+        const s1 = worldToScreen(dim.start.x, dim.start.y);
+        const s2 = worldToScreen(dim.end.x, dim.end.y);
+        const sc1 = worldToScreen(c1World.x, c1World.y);
+        const sc2 = worldToScreen(c2World.x, c2World.y);
+
+        ctx.save();
+        ctx.strokeStyle = '#38bdf8';
+        ctx.lineWidth = 1.2;
+
+        // 1. Linhas de Extensão / Chamada
+        ctx.beginPath();
+        ctx.moveTo(s1.x, s1.y);
+        ctx.lineTo(sc1.x, sc1.y);
+        ctx.moveTo(s2.x, s2.y);
+        ctx.lineTo(sc2.x, sc2.y);
+        ctx.stroke();
+
+        // 2. Linha de Cota Principal
+        ctx.beginPath();
+        ctx.moveTo(sc1.x, sc1.y);
+        ctx.lineTo(sc2.x, sc2.y);
+        ctx.stroke();
+
+        // 3. Ticks Arquitetônicos a 45°
+        const tickSize = 6;
+        ctx.beginPath();
+        ctx.moveTo(sc1.x - tickSize, sc1.y + tickSize);
+        ctx.lineTo(sc1.x + tickSize, sc1.y - tickSize);
+        ctx.moveTo(sc2.x - tickSize, sc2.y + tickSize);
+        ctx.lineTo(sc2.x + tickSize, sc2.y - tickSize);
+        ctx.lineWidth = 1.8;
+        ctx.stroke();
+
+        // 4. Texto da Medida em metros
+        const midX = (sc1.x + sc2.x) / 2;
+        const midY = (sc1.y + sc2.y) / 2;
+        const text = `${len.toFixed(2)} m`;
+
+        ctx.font = '600 11px "JetBrains Mono", monospace';
+        const tw = ctx.measureText(text).width;
+        ctx.fillStyle = 'rgba(15, 23, 42, 0.95)';
+        ctx.beginPath();
+        ctx.roundRect(midX - tw / 2 - 4, midY - 9, tw + 8, 18, 4);
+        ctx.fill();
+        ctx.fillStyle = '#38bdf8';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(text, midX, midY);
+
+        ctx.restore();
+      });
+
+      // I. Linhas de Corte Existentes (Sections NBR)
+      elements.sections.forEach((sec) => {
+        const dx = sec.end.x - sec.start.x;
+        const dy = sec.end.y - sec.start.y;
+        const len = Math.sqrt(dx * dx + dy * dy);
+        if (len < 0.1) return;
+
+        const ux = dx / len;
+        const uy = dy / len;
+        const nx = -uy;
+        const ny = ux;
+
+        const s1 = worldToScreen(sec.start.x, sec.start.y);
+        const s2 = worldToScreen(sec.end.x, sec.end.y);
+
+        ctx.save();
+
+        // 1. Linha de Corte Traço-Ponto
+        ctx.beginPath();
+        ctx.moveTo(s1.x, s1.y);
+        ctx.lineTo(s2.x, s2.y);
+        ctx.strokeStyle = '#ec4899';
+        ctx.lineWidth = 1.8;
+        ctx.setLineDash([14, 4, 3, 4]); // Traço-ponto NBR
+        ctx.stroke();
+        ctx.setLineDash([]);
+
+        // 2. Caixa de Profundidade do Corte (Far Clip Depth)
+        const farDepth = sec.farClipDepth || 2.0;
+        const f1 = worldToScreen(sec.start.x + nx * farDepth, sec.start.y + ny * farDepth);
+        const f2 = worldToScreen(sec.end.x + nx * farDepth, sec.end.y + ny * farDepth);
+        ctx.beginPath();
+        ctx.moveTo(s1.x, s1.y);
+        ctx.lineTo(f1.x, f1.y);
+        ctx.lineTo(f2.x, f2.y);
+        ctx.lineTo(s2.x, s2.y);
+        ctx.strokeStyle = 'rgba(236, 72, 153, 0.2)';
+        ctx.lineWidth = 1;
+        ctx.setLineDash([4, 4]);
+        ctx.stroke();
+        ctx.setLineDash([]);
+
+        // 3. Símbolos de Ponta Normatizados NBR (Círculo + Letra + Seta de Visão)
+        const letterMatch = sec.name.match(/[A-Za-z]/);
+        const letter = letterMatch ? letterMatch[0].toUpperCase() : 'A';
+        const radius = 13;
+
+        [s1, s2].forEach((pt) => {
+          // Círculo
+          ctx.beginPath();
+          ctx.arc(pt.x, pt.y, radius, 0, Math.PI * 2);
+          ctx.fillStyle = '#0f172a';
+          ctx.fill();
+          ctx.strokeStyle = '#ec4899';
+          ctx.lineWidth = 2;
+          ctx.stroke();
+
+          // Seta de Sentido de Visão
+          const arrowDirX = -ny;
+          const arrowDirY = -nx;
+          const tipX = pt.x + arrowDirX * (radius + 9);
+          const tipY = pt.y + arrowDirY * (radius + 9);
+          const baseLeftX = pt.x + arrowDirX * radius - arrowDirY * 6;
+          const baseLeftY = pt.y + arrowDirY * radius + arrowDirX * 6;
+          const baseRightX = pt.x + arrowDirX * radius + arrowDirY * 6;
+          const baseRightY = pt.y + arrowDirY * radius - arrowDirX * 6;
+
+          ctx.beginPath();
+          ctx.moveTo(tipX, tipY);
+          ctx.lineTo(baseLeftX, baseLeftY);
+          ctx.lineTo(baseRightX, baseRightY);
+          ctx.closePath();
+          ctx.fillStyle = '#ec4899';
+          ctx.fill();
+
+          // Letra do Corte
+          ctx.fillStyle = '#ffffff';
+          ctx.font = '700 12px "Inter", sans-serif';
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          ctx.fillText(letter, pt.x, pt.y);
+        });
+
+        ctx.restore();
       });
 
       // ==========================================
@@ -744,6 +904,127 @@ export const CanvasOverlay: React.FC<CanvasOverlayProps> = ({
         }
       }
 
+      // G1. Feedback da Ferramenta COTA ALINHADA (Dimension)
+      if (activeTool === 'dimension' && snapped) {
+        if (dimP1 && !dimP2) {
+          const s1 = worldToScreen(dimP1.x, dimP1.y);
+          const s2 = worldToScreen(snapped.x, snapped.y);
+          const dist = distance(dimP1, snapped);
+
+          ctx.save();
+          ctx.beginPath();
+          ctx.moveTo(s1.x, s1.y);
+          ctx.lineTo(s2.x, s2.y);
+          ctx.strokeStyle = '#38bdf8';
+          ctx.lineWidth = 1.5;
+          ctx.setLineDash([4, 4]);
+          ctx.stroke();
+
+          const label = `${dist.toFixed(2)} m • Clique para fixar 2º ponto`;
+          ctx.font = '600 11px "JetBrains Mono", monospace';
+          const lw = ctx.measureText(label).width;
+          const mx = (s1.x + s2.x) / 2;
+          const my = (s1.y + s2.y) / 2;
+          ctx.fillStyle = 'rgba(15, 23, 42, 0.95)';
+          ctx.beginPath();
+          ctx.roundRect(mx - lw / 2 - 6, my - 22, lw + 12, 20, 4);
+          ctx.fill();
+          ctx.fillStyle = '#38bdf8';
+          ctx.textAlign = 'center';
+          ctx.fillText(label, mx, my - 8);
+          ctx.restore();
+        } else if (dimP1 && dimP2) {
+          const dx = dimP2.x - dimP1.x;
+          const dy = dimP2.y - dimP1.y;
+          const len = Math.sqrt(dx * dx + dy * dy);
+          if (len > 0.01) {
+            const nx = -dy / len;
+            const ny = dx / len;
+            const offset = (snapped.x - dimP1.x) * nx + (snapped.y - dimP1.y) * ny;
+
+            const c1 = { x: dimP1.x + nx * offset, y: dimP1.y + ny * offset };
+            const c2 = { x: dimP2.x + nx * offset, y: dimP2.y + ny * offset };
+
+            const s1 = worldToScreen(dimP1.x, dimP1.y);
+            const s2 = worldToScreen(dimP2.x, dimP2.y);
+            const sc1 = worldToScreen(c1.x, c1.y);
+            const sc2 = worldToScreen(c2.x, c2.y);
+
+            ctx.save();
+            ctx.strokeStyle = '#38bdf8';
+            ctx.lineWidth = 1.2;
+
+            ctx.beginPath();
+            ctx.moveTo(s1.x, s1.y);
+            ctx.lineTo(sc1.x, sc1.y);
+            ctx.moveTo(s2.x, s2.y);
+            ctx.lineTo(sc2.x, sc2.y);
+            ctx.stroke();
+
+            ctx.beginPath();
+            ctx.moveTo(sc1.x, sc1.y);
+            ctx.lineTo(sc2.x, sc2.y);
+            ctx.stroke();
+
+            const ts = 6;
+            ctx.beginPath();
+            ctx.moveTo(sc1.x - ts, sc1.y + ts);
+            ctx.lineTo(sc1.x + ts, sc1.y - ts);
+            ctx.moveTo(sc2.x - ts, sc2.y + ts);
+            ctx.lineTo(sc2.x + ts, sc2.y - ts);
+            ctx.lineWidth = 1.8;
+            ctx.stroke();
+
+            const mx = (sc1.x + sc2.x) / 2;
+            const my = (sc1.y + sc2.y) / 2;
+            const label = `${len.toFixed(2)} m • Clique para fixar posição da cota`;
+            ctx.font = '600 11px "JetBrains Mono", monospace';
+            const lw = ctx.measureText(label).width;
+            ctx.fillStyle = 'rgba(15, 23, 42, 0.95)';
+            ctx.beginPath();
+            ctx.roundRect(mx - lw / 2 - 6, my - 22, lw + 12, 20, 4);
+            ctx.fill();
+            ctx.fillStyle = '#38bdf8';
+            ctx.textAlign = 'center';
+            ctx.fillText(label, mx, my - 8);
+            ctx.restore();
+          }
+        }
+      }
+
+      // G2. Feedback da Ferramenta CORTE (Section)
+      if (activeTool === 'section' && drawingStart && snapped) {
+        const s1 = worldToScreen(drawingStart.x, drawingStart.y);
+        const s2 = worldToScreen(snapped.x, snapped.y);
+        const dist = distance(drawingStart, snapped);
+
+        ctx.save();
+        ctx.beginPath();
+        ctx.moveTo(s1.x, s1.y);
+        ctx.lineTo(s2.x, s2.y);
+        ctx.strokeStyle = '#ec4899';
+        ctx.lineWidth = 2;
+        ctx.setLineDash([14, 4, 3, 4]);
+        ctx.stroke();
+        ctx.setLineDash([]);
+
+        const letter = String.fromCharCode(65 + elements.sections.length);
+        const label = `Corte ${letter}-${letter} (${dist.toFixed(2)} m) • Clique para finalizar corte`;
+        const mx = (s1.x + s2.x) / 2;
+        const my = (s1.y + s2.y) / 2;
+
+        ctx.font = '600 11px "Inter", sans-serif';
+        const lw = ctx.measureText(label).width;
+        ctx.fillStyle = 'rgba(15, 23, 42, 0.95)';
+        ctx.beginPath();
+        ctx.roundRect(mx - lw / 2 - 6, my - 22, lw + 12, 20, 4);
+        ctx.fill();
+        ctx.fillStyle = '#ec4899';
+        ctx.textAlign = 'center';
+        ctx.fillText(label, mx, my - 8);
+        ctx.restore();
+      }
+
       // G. Guias Polares (Raios pontilhados estendidos nos ângulos de 45°)
       if (currentSnapped?.guideLines) {
         ctx.save();
@@ -836,6 +1117,8 @@ export const CanvasOverlay: React.FC<CanvasOverlayProps> = ({
         setDrawingStart(null);
         setPolygonPoints([]);
         setNumericInput('');
+        setDimP1(null);
+        setDimP2(null);
         bimStore.setActiveTool('select');
         return;
       }
@@ -845,6 +1128,8 @@ export const CanvasOverlay: React.FC<CanvasOverlayProps> = ({
         setDrawingStart(null);
         setPolygonPoints([]);
         setNumericInput('');
+        setDimP1(null);
+        setDimP2(null);
       }
 
       // Atalhos de Teclado de 2 letras no estilo Revit (WA, DR, WN, FL, RO, ST, RM, RS, DI, SC)
@@ -1141,6 +1426,67 @@ export const CanvasOverlay: React.FC<CanvasOverlayProps> = ({
             levelId: activeLevelId,
           };
           bimStore.addRoomSeparator(newSep);
+          setDrawingStart(null);
+        }
+        return;
+      }
+
+      // 9. COTA ALINHADA (Dimension)
+      if (activeTool === 'dimension') {
+        if (!dimP1) {
+          setDimP1(clickPoint);
+        } else if (!dimP2) {
+          if (distance(dimP1, clickPoint) > 0.05) {
+            setDimP2(clickPoint);
+          }
+        } else {
+          // 3º clique: calcula offset perpendicular e cria a cota definitiva
+          const dx = dimP2.x - dimP1.x;
+          const dy = dimP2.y - dimP1.y;
+          const len = Math.sqrt(dx * dx + dy * dy);
+          let offset = 0.4;
+          if (len > 0.05) {
+            const nx = -dy / len;
+            const ny = dx / len;
+            offset = (clickPoint.x - dimP1.x) * nx + (clickPoint.y - dimP1.y) * ny;
+            if (Math.abs(offset) < 0.08) offset = offset >= 0 ? 0.35 : -0.35;
+          }
+          const newDim: DimensionElement = {
+            id: `dim-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
+            type: 'dimension',
+            start: { ...dimP1 },
+            end: { ...dimP2 },
+            offset,
+            levelId: activeLevelId,
+          };
+          bimStore.addDimension(newDim);
+          setDimP1(null);
+          setDimP2(null);
+        }
+        return;
+      }
+
+      // 10. LINHA DE CORTE (Section)
+      if (activeTool === 'section') {
+        if (!drawingStart) {
+          setDrawingStart(clickPoint);
+        } else {
+          const len = distance(drawingStart, clickPoint);
+          if (len > 0.25) {
+            const letter = String.fromCharCode(65 + elements.sections.length);
+            const newSec: SectionElement = {
+              id: `sec-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
+              type: 'section',
+              start: { ...drawingStart },
+              end: { ...clickPoint },
+              name: `Corte ${letter}-${letter}`,
+              farClipDepth: 2.5,
+              levelId: activeLevelId,
+            };
+            bimStore.addSection(newSec);
+            // Ao criar corte, alterna para a visualização do corte
+            bimStore.setActiveView('section');
+          }
           setDrawingStart(null);
         }
         return;
