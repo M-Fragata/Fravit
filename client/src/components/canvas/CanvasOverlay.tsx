@@ -51,6 +51,8 @@ export const CanvasOverlay: React.FC<CanvasOverlayProps> = ({
   const [doorFlipFacing, setDoorFlipFacing] = useState<boolean>(false);
   const [dimP1, setDimP1] = useState<Point2D | null>(null);
   const [dimP2, setDimP2] = useState<Point2D | null>(null);
+  const [secP1, setSecP1] = useState<Point2D | null>(null);
+  const [secP2, setSecP2] = useState<Point2D | null>(null);
 
   const mousePosScreenRef = useRef<{ x: number; y: number }>({ x: -100, y: -100 });
   const rawWorldMouseRef = useRef<Point2D>({ x: 0, y: 0 });
@@ -446,15 +448,19 @@ export const CanvasOverlay: React.FC<CanvasOverlayProps> = ({
         ctx.setLineDash([]);
 
         // 2. Caixa de Profundidade do Corte (Far Clip Depth)
+        const dir = sec.direction ?? 1;
+        const lookNx = nx * dir;
+        const lookNy = ny * dir;
         const farDepth = sec.farClipDepth || 2.0;
-        const f1 = worldToScreen(sec.start.x + nx * farDepth, sec.start.y + ny * farDepth);
-        const f2 = worldToScreen(sec.end.x + nx * farDepth, sec.end.y + ny * farDepth);
+
+        const f1 = worldToScreen(sec.start.x + lookNx * farDepth, sec.start.y + lookNy * farDepth);
+        const f2 = worldToScreen(sec.end.x + lookNx * farDepth, sec.end.y + lookNy * farDepth);
         ctx.beginPath();
         ctx.moveTo(s1.x, s1.y);
         ctx.lineTo(f1.x, f1.y);
         ctx.lineTo(f2.x, f2.y);
         ctx.lineTo(s2.x, s2.y);
-        ctx.strokeStyle = 'rgba(236, 72, 153, 0.2)';
+        ctx.strokeStyle = 'rgba(236, 72, 153, 0.25)';
         ctx.lineWidth = 1;
         ctx.setLineDash([4, 4]);
         ctx.stroke();
@@ -464,6 +470,12 @@ export const CanvasOverlay: React.FC<CanvasOverlayProps> = ({
         const letterMatch = sec.name.match(/[A-Za-z]/);
         const letter = letterMatch ? letterMatch[0].toUpperCase() : 'A';
         const radius = 13;
+
+        // Sentido da seta na tela (Y da tela é invertido em relação a mundo)
+        const arrowDirX = lookNx;
+        const arrowDirY = -lookNy;
+        const perpX = -arrowDirY;
+        const perpY = arrowDirX;
 
         [s1, s2].forEach((pt) => {
           // Círculo
@@ -476,14 +488,12 @@ export const CanvasOverlay: React.FC<CanvasOverlayProps> = ({
           ctx.stroke();
 
           // Seta de Sentido de Visão
-          const arrowDirX = -ny;
-          const arrowDirY = -nx;
           const tipX = pt.x + arrowDirX * (radius + 9);
           const tipY = pt.y + arrowDirY * (radius + 9);
-          const baseLeftX = pt.x + arrowDirX * radius - arrowDirY * 6;
-          const baseLeftY = pt.y + arrowDirY * radius + arrowDirX * 6;
-          const baseRightX = pt.x + arrowDirX * radius + arrowDirY * 6;
-          const baseRightY = pt.y + arrowDirY * radius - arrowDirX * 6;
+          const baseLeftX = pt.x + arrowDirX * radius - perpX * 6;
+          const baseLeftY = pt.y + arrowDirY * radius - perpY * 6;
+          const baseRightX = pt.x + arrowDirX * radius + perpX * 6;
+          const baseRightY = pt.y + arrowDirY * radius + perpY * 6;
 
           ctx.beginPath();
           ctx.moveTo(tipX, tipY);
@@ -992,37 +1002,146 @@ export const CanvasOverlay: React.FC<CanvasOverlayProps> = ({
         }
       }
 
-      // G2. Feedback da Ferramenta CORTE (Section)
-      if (activeTool === 'section' && drawingStart && snapped) {
-        const s1 = worldToScreen(drawingStart.x, drawingStart.y);
-        const s2 = worldToScreen(snapped.x, snapped.y);
-        const dist = distance(drawingStart, snapped);
+      // G2. Feedback da Ferramenta CORTE (Section em 3 Cliques: P1 -> P2 -> Sentido/Profundidade)
+      if (activeTool === 'section' && snapped) {
+        if (secP1 && !secP2) {
+          // Fase 1: Desenhando o traço de corte
+          const s1 = worldToScreen(secP1.x, secP1.y);
+          const s2 = worldToScreen(snapped.x, snapped.y);
+          const dist = distance(secP1, snapped);
 
-        ctx.save();
-        ctx.beginPath();
-        ctx.moveTo(s1.x, s1.y);
-        ctx.lineTo(s2.x, s2.y);
-        ctx.strokeStyle = '#ec4899';
-        ctx.lineWidth = 2;
-        ctx.setLineDash([14, 4, 3, 4]);
-        ctx.stroke();
-        ctx.setLineDash([]);
+          ctx.save();
+          ctx.beginPath();
+          ctx.moveTo(s1.x, s1.y);
+          ctx.lineTo(s2.x, s2.y);
+          ctx.strokeStyle = '#ec4899';
+          ctx.lineWidth = 2;
+          ctx.setLineDash([14, 4, 3, 4]);
+          ctx.stroke();
+          ctx.setLineDash([]);
 
-        const letter = String.fromCharCode(65 + elements.sections.length);
-        const label = `Corte ${letter}-${letter} (${dist.toFixed(2)} m) • Clique para finalizar corte`;
-        const mx = (s1.x + s2.x) / 2;
-        const my = (s1.y + s2.y) / 2;
+          const letter = String.fromCharCode(65 + elements.sections.length);
+          const label = `Corte ${letter}-${letter} (${dist.toFixed(2)} m) • 2º Clique: Final da linha de corte`;
+          const mx = (s1.x + s2.x) / 2;
+          const my = (s1.y + s2.y) / 2;
 
-        ctx.font = '600 11px "Inter", sans-serif';
-        const lw = ctx.measureText(label).width;
-        ctx.fillStyle = 'rgba(15, 23, 42, 0.95)';
-        ctx.beginPath();
-        ctx.roundRect(mx - lw / 2 - 6, my - 22, lw + 12, 20, 4);
-        ctx.fill();
-        ctx.fillStyle = '#ec4899';
-        ctx.textAlign = 'center';
-        ctx.fillText(label, mx, my - 8);
-        ctx.restore();
+          ctx.font = '600 11px "Inter", sans-serif';
+          const lw = ctx.measureText(label).width;
+          ctx.fillStyle = 'rgba(15, 23, 42, 0.95)';
+          ctx.beginPath();
+          ctx.roundRect(mx - lw / 2 - 6, my - 22, lw + 12, 20, 4);
+          ctx.fill();
+          ctx.fillStyle = '#ec4899';
+          ctx.textAlign = 'center';
+          ctx.fillText(label, mx, my - 8);
+          ctx.restore();
+        } else if (secP1 && secP2) {
+          // Fase 2: Definindo direção de visão (para cima/baixo/esq/dir) e profundidade
+          const s1 = worldToScreen(secP1.x, secP1.y);
+          const s2 = worldToScreen(secP2.x, secP2.y);
+
+          const sDx = secP2.x - secP1.x;
+          const sDy = secP2.y - secP1.y;
+          const sLen = Math.sqrt(sDx * sDx + sDy * sDy) || 1;
+          const nx = -sDy / sLen;
+          const ny = sDx / sLen;
+
+          // Vetor secP1 -> cursor snapped
+          const vx = snapped.x - secP1.x;
+          const vy = snapped.y - secP1.y;
+          const side = vx * nx + vy * ny;
+          const dir = side >= 0 ? 1 : -1;
+          const farDepth = Math.max(0.6, Math.abs(side));
+
+          const lookNx = nx * dir;
+          const lookNy = ny * dir;
+
+          ctx.save();
+
+          // 1. Linha do corte
+          ctx.beginPath();
+          ctx.moveTo(s1.x, s1.y);
+          ctx.lineTo(s2.x, s2.y);
+          ctx.strokeStyle = '#ec4899';
+          ctx.lineWidth = 2;
+          ctx.setLineDash([14, 4, 3, 4]);
+          ctx.stroke();
+          ctx.setLineDash([]);
+
+          // 2. Caixa de profundidade dinâmica estendida no lado do mouse
+          const f1 = worldToScreen(secP1.x + lookNx * farDepth, secP1.y + lookNy * farDepth);
+          const f2 = worldToScreen(secP2.x + lookNx * farDepth, secP2.y + lookNy * farDepth);
+          ctx.beginPath();
+          ctx.moveTo(s1.x, s1.y);
+          ctx.lineTo(f1.x, f1.y);
+          ctx.lineTo(f2.x, f2.y);
+          ctx.lineTo(s2.x, s2.y);
+          ctx.strokeStyle = '#ec4899';
+          ctx.lineWidth = 1.2;
+          ctx.setLineDash([5, 5]);
+          ctx.stroke();
+          ctx.setLineDash([]);
+
+          // 3. Setas e Círculos com orientação dinâmica para o lado do mouse
+          const letter = String.fromCharCode(65 + elements.sections.length);
+          const radius = 13;
+          const arrowDirX = lookNx;
+          const arrowDirY = -lookNy; // Y de tela é invertido
+          const perpX = -arrowDirY;
+          const perpY = arrowDirX;
+
+          [s1, s2].forEach((pt) => {
+            ctx.beginPath();
+            ctx.arc(pt.x, pt.y, radius, 0, Math.PI * 2);
+            ctx.fillStyle = '#0f172a';
+            ctx.fill();
+            ctx.strokeStyle = '#ec4899';
+            ctx.lineWidth = 2;
+            ctx.stroke();
+
+            const tipX = pt.x + arrowDirX * (radius + 9);
+            const tipY = pt.y + arrowDirY * (radius + 9);
+            const baseLeftX = pt.x + arrowDirX * radius - perpX * 6;
+            const baseLeftY = pt.y + arrowDirY * radius - perpY * 6;
+            const baseRightX = pt.x + arrowDirX * radius + perpX * 6;
+            const baseRightY = pt.y + arrowDirY * radius + perpY * 6;
+
+            ctx.beginPath();
+            ctx.moveTo(tipX, tipY);
+            ctx.lineTo(baseLeftX, baseLeftY);
+            ctx.lineTo(baseRightX, baseRightY);
+            ctx.closePath();
+            ctx.fillStyle = '#ec4899';
+            ctx.fill();
+
+            ctx.fillStyle = '#ffffff';
+            ctx.font = '700 12px "Inter", sans-serif';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(letter, pt.x, pt.y);
+          });
+
+          // Rótulo de orientação ao usuário
+          const mx = (s1.x + s2.x) / 2;
+          const my = (s1.y + s2.y) / 2;
+          const dirDesc = dir > 0 ? 'Superior / Esquerda' : 'Inferior / Direita';
+          const label = `Corte ${letter}-${letter} (${farDepth.toFixed(2)} m) • 3º Clique: Fixar sentido (${dirDesc})`;
+
+          ctx.font = '600 11px "Inter", sans-serif';
+          const lw = ctx.measureText(label).width;
+          ctx.fillStyle = 'rgba(15, 23, 42, 0.95)';
+          ctx.beginPath();
+          ctx.roundRect(mx - lw / 2 - 8, my - 24, lw + 16, 20, 4);
+          ctx.fill();
+          ctx.strokeStyle = '#ec4899';
+          ctx.lineWidth = 1;
+          ctx.stroke();
+          ctx.fillStyle = '#ec4899';
+          ctx.textAlign = 'center';
+          ctx.fillText(label, mx, my - 10);
+
+          ctx.restore();
+        }
       }
 
       // G. Guias Polares (Raios pontilhados estendidos nos ângulos de 45°)
@@ -1224,6 +1343,10 @@ export const CanvasOverlay: React.FC<CanvasOverlayProps> = ({
           setDrawingStart(null);
           setPolygonPoints([]);
           setNumericInput('');
+          setDimP1(null);
+          setDimP2(null);
+          setSecP1(null);
+          setSecP2(null);
           shortcutBufferRef.current = '';
           return;
         }
@@ -1231,6 +1354,18 @@ export const CanvasOverlay: React.FC<CanvasOverlayProps> = ({
         if (shortcutBufferRef.current.length >= 2) {
           shortcutBufferRef.current = e.key.toLowerCase();
         }
+      }
+
+      if (e.key === 'Escape') {
+        setDrawingStart(null);
+        setPolygonPoints([]);
+        setNumericInput('');
+        setDimP1(null);
+        setDimP2(null);
+        setSecP1(null);
+        setSecP2(null);
+        bimStore.setActiveTool('select');
+        return;
       }
 
       if (e.code === 'Space') {
@@ -1530,28 +1665,48 @@ export const CanvasOverlay: React.FC<CanvasOverlayProps> = ({
         return;
       }
 
-      // 10. LINHA DE CORTE (Section)
+      // 10. LINHA DE CORTE (Section em 3 Cliques: P1 -> P2 -> Sentido/Profundidade)
       if (activeTool === 'section') {
-        if (!drawingStart) {
-          setDrawingStart(clickPoint);
-        } else {
-          const len = distance(drawingStart, clickPoint);
+        if (!secP1) {
+          // 1º Clique: Ponto inicial
+          setSecP1(clickPoint);
+        } else if (!secP2) {
+          // 2º Clique: Ponto final da linha de corte
+          const len = distance(secP1, clickPoint);
           if (len > 0.25) {
-            const letter = String.fromCharCode(65 + elements.sections.length);
-            const newSec: SectionElement = {
-              id: `sec-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
-              type: 'section',
-              start: { ...drawingStart },
-              end: { ...clickPoint },
-              name: `Corte ${letter}-${letter}`,
-              farClipDepth: 2.5,
-              levelId: activeLevelId,
-            };
-            bimStore.addSection(newSec);
-            // Ao criar corte, alterna para a visualização do corte
-            bimStore.setActiveView('section');
+            setSecP2(clickPoint);
           }
-          setDrawingStart(null);
+        } else {
+          // 3º Clique: Direção de visão e profundidade conforme posição do cursor
+          const sDx = secP2.x - secP1.x;
+          const sDy = secP2.y - secP1.y;
+          const sLen = Math.sqrt(sDx * sDx + sDy * sDy) || 1;
+          const nx = -sDy / sLen;
+          const ny = sDx / sLen;
+
+          const vx = clickPoint.x - secP1.x;
+          const vy = clickPoint.y - secP1.y;
+          const side = vx * nx + vy * ny;
+          const direction: 1 | -1 = side >= 0 ? 1 : -1;
+          const farDepth = Math.max(0.6, Math.abs(side));
+
+          const letter = String.fromCharCode(65 + elements.sections.length);
+          const newSec: SectionElement = {
+            id: `sec-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
+            type: 'section',
+            start: { ...secP1 },
+            end: { ...secP2 },
+            name: `Corte ${letter}-${letter}`,
+            farClipDepth: farDepth,
+            direction,
+            levelId: activeLevelId,
+          };
+
+          bimStore.addSection(newSec);
+          setSecP1(null);
+          setSecP2(null);
+          bimStore.setActiveSectionId(newSec.id);
+          bimStore.setActiveView('section');
         }
         return;
       }

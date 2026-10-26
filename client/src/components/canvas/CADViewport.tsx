@@ -167,6 +167,9 @@ export const CADViewport: React.FC<CADViewportProps> = ({ onCursorMove }) => {
           const sNy = uX;
           const sMidX = (currentSec.start.x + currentSec.end.x) / 2;
           const sMidY = (currentSec.start.y + currentSec.end.y) / 2;
+          const dir = currentSec.direction ?? 1;
+          const lookNx = sNx * dir;
+          const lookNy = sNy * dir;
 
           const curHeight = containerRef.current?.clientHeight || 600;
           const curWidth = containerRef.current?.clientWidth || 800;
@@ -182,7 +185,8 @@ export const CADViewport: React.FC<CADViewportProps> = ({ onCursorMove }) => {
           const camTargetY = sMidY + uY * sectionPanRef.current.u;
           const camTargetZ = sectionPanRef.current.z;
 
-          orthoCam.position.set(camTargetX + sNx * 50, camTargetY + sNy * 50, camTargetZ);
+          // Câmera posicionada antes do corte olhando para frente na direção do corte
+          orthoCam.position.set(camTargetX - lookNx * 50, camTargetY - lookNy * 50, camTargetZ);
           orthoCam.lookAt(camTargetX, camTargetY, camTargetZ);
           orthoCam.up.set(0, 0, 1);
           orthoCam.updateProjectionMatrix();
@@ -274,10 +278,13 @@ export const CADViewport: React.FC<CADViewportProps> = ({ onCursorMove }) => {
       const sNy = sDx / sLen;
       const sMidX = (currentSection.start.x + currentSection.end.x) / 2;
       const sMidY = (currentSection.start.y + currentSection.end.y) / 2;
+      const dir = currentSection.direction ?? 1;
+      const lookNx = sNx * dir;
+      const lookNy = sNy * dir;
 
       const clipPlane = new THREE.Plane();
       clipPlane.setFromNormalAndCoplanarPoint(
-        new THREE.Vector3(-sNx, -sNy, 0),
+        new THREE.Vector3(lookNx, lookNy, 0),
         new THREE.Vector3(sMidX, sMidY, 0)
       );
       rendererRef.current.clippingPlanes = [clipPlane];

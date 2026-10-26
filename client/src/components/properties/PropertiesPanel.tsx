@@ -433,11 +433,12 @@ export const PropertiesPanel: React.FC = () => {
             <div style={{ padding: 12, background: 'rgba(56, 189, 248, 0.05)', borderRadius: 'var(--radius-md)', border: '1px solid rgba(56, 189, 248, 0.2)' }}>
               <div style={{ fontSize: '12px', color: 'var(--cad-cyan)', display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
                 <Info size={14} />
-                <span>Como Utilizar:</span>
+                <span>Fluxo em 3 Cliques:</span>
               </div>
               <ol style={{ fontSize: '11px', color: 'var(--text-muted)', lineHeight: 1.6, paddingLeft: 18, margin: 0 }}>
-                <li><strong>1º Clique:</strong> Ponto inicial do plano de corte</li>
+                <li><strong>1º Clique:</strong> Ponto inicial da linha de corte</li>
                 <li><strong>2º Clique:</strong> Ponto final da linha de corte</li>
+                <li><strong>3º Clique:</strong> Lado de visão (posicione o cursor para cima/baixo/esq/dir) e profundidade</li>
               </ol>
               <p style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: 8, lineHeight: 1.4 }}>
                 Ao criar o corte, ele é listado no <em>Navegador de Projeto</em>. Clique nele para abrir a visualização fatiada com linhas de nível!

@@ -147,6 +147,7 @@ export interface SectionElement {
   end: Point2D;
   name: string;
   farClipDepth: number; // profundidade do corte em metros
+  direction?: 1 | -1; // 1 = +normal, -1 = -normal
   levelId: string;
 }
 
