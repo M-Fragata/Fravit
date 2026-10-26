@@ -184,15 +184,181 @@ export const bimStore = {
     emitChange();
   },
 
+  setDoorDefaults: (width: number, height: number) => {
+    currentState = {
+      ...currentState,
+      defaults: {
+        ...currentState.defaults,
+        door: { width, height },
+      },
+    };
+    emitChange();
+  },
+
+  setWindowDefaults: (width: number, height: number, sillHeight: number) => {
+    currentState = {
+      ...currentState,
+      defaults: {
+        ...currentState.defaults,
+        window: { width, height, sillHeight },
+      },
+    };
+    emitChange();
+  },
+
   // Adição de Parede com Histórico (Undo)
   addWall: (wall: WallElement) => {
     const currentClone = structuredClone(currentState.elements);
-    const nextWalls = [...currentState.elements.walls, wall];
     const newElements = {
       ...currentState.elements,
-      walls: nextWalls,
+      walls: [...currentState.elements.walls, wall],
     };
+    currentState = {
+      ...currentState,
+      elements: newElements,
+      history: {
+        past: [...currentState.history.past, currentClone],
+        future: [],
+      },
+    };
+    emitChange();
+  },
 
+  // Adição de Porta (ancorada em parede hospedeira)
+  addDoor: (door: DoorElement) => {
+    const currentClone = structuredClone(currentState.elements);
+    const newElements = {
+      ...currentState.elements,
+      doors: [...currentState.elements.doors, door],
+    };
+    currentState = {
+      ...currentState,
+      elements: newElements,
+      history: {
+        past: [...currentState.history.past, currentClone],
+        future: [],
+      },
+    };
+    emitChange();
+  },
+
+  // Inverter sentido de abertura da porta (tecla Espaço)
+  flipDoor: (doorId: string) => {
+    const currentClone = structuredClone(currentState.elements);
+    const updatedDoors = currentState.elements.doors.map((d) => {
+      if (d.id === doorId) {
+        return { ...d, flipFacing: !d.flipFacing };
+      }
+      return d;
+    });
+    currentState = {
+      ...currentState,
+      elements: { ...currentState.elements, doors: updatedDoors },
+      history: {
+        past: [...currentState.history.past, currentClone],
+        future: [],
+      },
+    };
+    emitChange();
+  },
+
+  // Adição de Janela
+  addWindow: (win: WindowElement) => {
+    const currentClone = structuredClone(currentState.elements);
+    const newElements = {
+      ...currentState.elements,
+      windows: [...currentState.elements.windows, win],
+    };
+    currentState = {
+      ...currentState,
+      elements: newElements,
+      history: {
+        past: [...currentState.history.past, currentClone],
+        future: [],
+      },
+    };
+    emitChange();
+  },
+
+  // Adição de Piso / Laje
+  addFloor: (floor: FloorElement) => {
+    const currentClone = structuredClone(currentState.elements);
+    const newElements = {
+      ...currentState.elements,
+      floors: [...currentState.elements.floors, floor],
+    };
+    currentState = {
+      ...currentState,
+      elements: newElements,
+      history: {
+        past: [...currentState.history.past, currentClone],
+        future: [],
+      },
+    };
+    emitChange();
+  },
+
+  // Adição de Telhado
+  addRoof: (roof: RoofElement) => {
+    const currentClone = structuredClone(currentState.elements);
+    const newElements = {
+      ...currentState.elements,
+      roofs: [...currentState.elements.roofs, roof],
+    };
+    currentState = {
+      ...currentState,
+      elements: newElements,
+      history: {
+        past: [...currentState.history.past, currentClone],
+        future: [],
+      },
+    };
+    emitChange();
+  },
+
+  // Adição de Escada
+  addStair: (stair: StairElement) => {
+    const currentClone = structuredClone(currentState.elements);
+    const newElements = {
+      ...currentState.elements,
+      stairs: [...currentState.elements.stairs, stair],
+    };
+    currentState = {
+      ...currentState,
+      elements: newElements,
+      history: {
+        past: [...currentState.history.past, currentClone],
+        future: [],
+      },
+    };
+    emitChange();
+  },
+
+  // Adição de Ambiente com m²
+  addRoom: (room: RoomElement) => {
+    const currentClone = structuredClone(currentState.elements);
+    const newElements = {
+      ...currentState.elements,
+      rooms: [...currentState.elements.rooms, room],
+    };
+    currentState = {
+      ...currentState,
+      elements: newElements,
+      history: {
+        past: [...currentState.history.past, currentClone],
+        future: [],
+      },
+    };
+    emitChange();
+  },
+
+  // Adição de Linha Separadora de Ambiente
+  addRoomSeparator: (separator: RoomSeparatorElement) => {
+    const currentClone = structuredClone(currentState.elements);
+    const newElements = {
+      ...currentState.elements,
+      roomSeparators: [...currentState.elements.roomSeparators, separator],
+    };
     currentState = {
       ...currentState,
       elements: newElements,

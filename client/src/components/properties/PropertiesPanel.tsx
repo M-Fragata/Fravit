@@ -33,6 +33,18 @@ export const PropertiesPanel: React.FC = () => {
     bimStore.setWallDefaults(wallThickness, val);
   };
 
+  const handleSelectDoorType = (idx: number) => {
+    setSelectedDoorTypeIdx(idx);
+    const dt = doorTypes[idx];
+    bimStore.setDoorDefaults(dt.width, dt.height);
+  };
+
+  const handleSelectWindowType = (idx: number) => {
+    setSelectedWindowTypeIdx(idx);
+    const wt = windowTypes[idx];
+    bimStore.setWindowDefaults(wt.width, wt.height, wt.sill);
+  };
+
   // Duplicar Tipo de Porta
   const handleDuplicateDoor = () => {
     const current = doorTypes[selectedDoorTypeIdx];
@@ -42,8 +54,10 @@ export const PropertiesPanel: React.FC = () => {
     const newHeight = parseFloat(prompt('Altura da porta em metros (ex: 2.10):', current.height.toString()) || current.height.toString());
 
     const newType = { name: newName, width: newWidth, height: newHeight };
-    setDoorTypes((prev) => [...prev, newType]);
-    setSelectedDoorTypeIdx(doorTypes.length);
+    const nextList = [...doorTypes, newType];
+    setDoorTypes(nextList);
+    setSelectedDoorTypeIdx(nextList.length - 1);
+    bimStore.setDoorDefaults(newWidth, newHeight);
   };
 
   // Duplicar Tipo de Janela
@@ -56,8 +70,10 @@ export const PropertiesPanel: React.FC = () => {
     const newSill = parseFloat(prompt('Peitoril da janela em metros:', current.sill.toString()) || current.sill.toString());
 
     const newType = { name: newName, width: newWidth, height: newHeight, sill: newSill };
-    setWindowTypes((prev) => [...prev, newType]);
-    setSelectedWindowTypeIdx(windowTypes.length);
+    const nextList = [...windowTypes, newType];
+    setWindowTypes(nextList);
+    setSelectedWindowTypeIdx(nextList.length - 1);
+    bimStore.setWindowDefaults(newWidth, newHeight, newSill);
   };
 
   return (
@@ -204,7 +220,7 @@ export const PropertiesPanel: React.FC = () => {
                 return (
                   <div
                     key={idx}
-                    onClick={() => setSelectedDoorTypeIdx(idx)}
+                    onClick={() => handleSelectDoorType(idx)}
                     style={{
                       padding: '10px 12px',
                       borderRadius: 'var(--radius-sm)',
@@ -265,7 +281,7 @@ export const PropertiesPanel: React.FC = () => {
                 return (
                   <div
                     key={idx}
-                    onClick={() => setSelectedWindowTypeIdx(idx)}
+                    onClick={() => handleSelectWindowType(idx)}
                     style={{
                       padding: '10px 12px',
                       borderRadius: 'var(--radius-sm)',
@@ -292,10 +308,98 @@ export const PropertiesPanel: React.FC = () => {
           </div>
         )}
 
+        {/* Propriedades do Piso */}
+        {activeTool === 'floor' && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--cad-cyan)', textTransform: 'uppercase' }}>
+              Piso / Laje Estrutural
+            </div>
+            <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
+              Espessura padrão: <strong>15 cm</strong>
+            </div>
+            <div style={{ padding: 12, background: 'rgba(56, 189, 248, 0.05)', borderRadius: 'var(--radius-md)', border: '1px solid rgba(56, 189, 248, 0.2)' }}>
+              <div style={{ fontSize: '12px', color: 'var(--cad-cyan)', display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
+                <Info size={14} />
+                <span>Como Desenhar:</span>
+              </div>
+              <p style={{ fontSize: '11px', color: 'var(--text-muted)', lineHeight: 1.5 }}>
+                Clique nos cantos para delimitar o perímetro do piso. Para finalizar, clique de volta no primeiro ponto inicial.
+              </p>
+            </div>
+          </div>
+        )}
+
+        {/* Propriedades do Telhado */}
+        {activeTool === 'roof' && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--cad-cyan)', textTransform: 'uppercase' }}>
+              Telhado / Cobertura
+            </div>
+            <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
+              Inclinação: <strong>10% (Caimento)</strong> • Beiral: <strong>0.60 m</strong>
+            </div>
+            <div style={{ padding: 12, background: 'rgba(239, 68, 68, 0.05)', borderRadius: 'var(--radius-md)', border: '1px solid rgba(239, 68, 68, 0.2)' }}>
+              <p style={{ fontSize: '11px', color: 'var(--text-muted)', lineHeight: 1.5 }}>
+                Desenhe o contorno da cobertura clicando nos vértices. Feche no ponto inicial para gerar a laje de topo impermeabilizada.
+              </p>
+            </div>
+          </div>
+        )}
+
+        {/* Propriedades da Escada */}
+        {activeTool === 'stair' && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--cad-cyan)', textTransform: 'uppercase' }}>
+              Escada Paramétrica
+            </div>
+            <div style={{ fontSize: '12px', color: 'var(--text-muted)', lineHeight: 1.6 }}>
+              Fórmula de Blondel: <strong>2E + P = 63 cm</strong><br />
+              Espelho: <strong>17.5 cm</strong> • Piso: <strong>28 cm</strong><br />
+              Largura do lance: <strong>0.90 m</strong>
+            </div>
+            <div style={{ padding: 12, background: 'rgba(56, 189, 248, 0.05)', borderRadius: 'var(--radius-md)', border: '1px solid rgba(56, 189, 248, 0.2)' }}>
+              <p style={{ fontSize: '11px', color: 'var(--text-muted)', lineHeight: 1.5 }}>
+                1º Clique: Ponto de partida (piso inferior).<br />
+                2º Clique: Topo do lance. A escada calcula automaticamente o número exato de degraus.
+              </p>
+            </div>
+          </div>
+        )}
+
+        {/* Propriedades do Ambiente */}
+        {activeTool === 'room' && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--cad-cyan)', textTransform: 'uppercase' }}>
+              Ambiente com Área (m²)
+            </div>
+            <div style={{ padding: 12, background: 'rgba(34, 197, 94, 0.05)', borderRadius: 'var(--radius-md)', border: '1px solid rgba(34, 197, 94, 0.2)' }}>
+              <div style={{ fontSize: '12px', color: '#22c55e', display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
+                <Info size={14} />
+                <span>Detecção Automática:</span>
+              </div>
+              <p style={{ fontSize: '11px', color: 'var(--text-muted)', lineHeight: 1.5 }}>
+                Passe o mouse dentro de qualquer espaço fechado por paredes ou separadores. O Fravit calcula a área líquida e aplica a etiqueta técnica com nome e m².
+              </p>
+            </div>
+          </div>
+        )}
+
+        {/* Propriedades do Separador de Ambiente */}
+        {activeTool === 'roomSeparator' && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--cad-cyan)', textTransform: 'uppercase' }}>
+              Separador de Ambiente
+            </div>
+            <p style={{ fontSize: '12px', color: 'var(--text-muted)', lineHeight: 1.5 }}>
+              Linha virtual traço-ponto para delimitar recintos integrados (ex: dividir Sala de Estar e Sala de Jantar sem parede física).
+            </p>
+          </div>
+        )}
+
         {/* Outras ferramentas */}
-        {activeTool !== 'wall' && activeTool !== 'door' && activeTool !== 'window' && (
+        {activeTool === 'select' && (
           <div style={{ textAlign: 'center', padding: '40px 10px', color: 'var(--text-dim)', fontSize: '13px' }}>
-            Selecione uma ferramenta ou clique em um elemento da cena para inspecionar e editar suas propriedades paramétricas.
+            Selecione uma ferramenta na barra esquerda ou clique em um elemento na tela para inspecionar e editar suas propriedades paramétricas.
           </div>
         )}
       </div>

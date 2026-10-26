@@ -1,7 +1,12 @@
 import React, { useRef, useEffect, useCallback, useState } from 'react';
 import * as THREE from 'three';
 import { useBIM } from '../../cad-core/engine/bimStore';
-import type { Point2D, WallElement } from '../../cad-core/types';
+import type { Point2D } from '../../cad-core/types';
+import {
+  getWallOpenings,
+  getSolidWallSegments,
+  findWallJoints,
+} from '../../cad-core/geometry/wallGeometry';
 import { CanvasOverlay } from './CanvasOverlay';
 
 interface CADViewportProps {
@@ -188,67 +193,335 @@ export const CADViewport: React.FC<CADViewportProps> = ({ onCursorMove }) => {
     };
   }, [activeView]);
 
-  // 2. Reconstruir Geometria 3D e 2D das Paredes com Alto Contraste
+  // 2. Reconstruir Geometria 3D e 2D de Paredes com Vãos, Portas, Janelas, Pisos, Telhados e Escadas
   useEffect(() => {
     if (!wallGroupRef.current) return;
     const group = wallGroupRef.current;
 
+    // Limpeza profunda de malhas anteriores
     while (group.children.length > 0) {
-      const child = group.children[0] as THREE.Mesh;
+      const child = group.children[0] as THREE.Object3D;
       group.remove(child);
-      if (child.geometry) child.geometry.dispose();
-      if (Array.isArray(child.material)) {
-        child.material.forEach((m) => m.dispose());
-      } else if (child.material) {
-        child.material.dispose();
+      if ((child as any).geometry) (child as any).geometry.dispose();
+      if ((child as any).material) {
+        if (Array.isArray((child as any).material)) {
+          (child as any).material.forEach((m: any) => m.dispose());
+        } else {
+          (child as any).material.dispose();
+        }
       }
     }
 
-    const wall3DMaterial = new THREE.MeshStandardMaterial({
-      color: 0xe2e8f0,
-      roughness: 0.5,
-      metalness: 0.1,
-    });
+    const is3D = activeView === '3d';
 
+    // Materiais Técnicos
+    const wall3DMaterial = new THREE.MeshStandardMaterial({
+      color: 0xededed,
+      roughness: 0.55,
+      metalness: 0.05,
+    });
+    const wall2DMaterial = new THREE.MeshBasicMaterial({
+      color: 0x223046,
+    });
     const edgeMaterial3D = new THREE.LineBasicMaterial({
       color: 0x1e293b,
-      linewidth: 2,
+      linewidth: 1.5,
     });
-
-    const wall2DMaterial = new THREE.MeshBasicMaterial({
-      color: 0x334155,
-    });
-
     const edgeMaterial2D = new THREE.LineBasicMaterial({
       color: 0x38bdf8,
       linewidth: 2,
     });
+    const sillMaterial = new THREE.MeshStandardMaterial({
+      color: 0xd4d4d8,
+      roughness: 0.7,
+    });
+    const glassMaterial = new THREE.MeshStandardMaterial({
+      color: 0x7dd3fc,
+      roughness: 0.1,
+      metalness: 0.1,
+      transparent: true,
+      opacity: is3D ? 0.45 : 0.8,
+    });
+    const frameMaterial = new THREE.MeshStandardMaterial({
+      color: 0x0f172a,
+      roughness: 0.4,
+    });
+    const doorLeafMaterial = new THREE.MeshStandardMaterial({
+      color: 0xc27803, // Tom de madeira carvalho para portas
+      roughness: 0.6,
+    });
+    const floorMaterial = new THREE.MeshStandardMaterial({
+      color: 0x334155,
+      roughness: 0.9,
+    });
+    const roofMaterial = new THREE.MeshStandardMaterial({
+      color: 0x475569,
+      roughness: 0.6,
+    });
+    const stairMaterial = new THREE.MeshStandardMaterial({
+      color: 0x64748b,
+      roughness: 0.5,
+    });
 
-    elements.walls.forEach((wall: WallElement) => {
-      const dx = wall.end.x - wall.start.x;
-      const dy = wall.end.y - wall.start.y;
-      const length = Math.sqrt(dx * dx + dy * dy);
-      if (length < 0.01) return;
-
-      const angle = Math.atan2(dy, dx);
-      const midX = (wall.start.x + wall.end.x) / 2;
-      const midY = (wall.start.y + wall.end.y) / 2;
-      const midZ = wall.height / 2;
-
-      const geom = new THREE.BoxGeometry(length, wall.thickness, wall.height);
-      const mesh = new THREE.Mesh(geom, activeView === '3d' ? wall3DMaterial : wall2DMaterial);
-      mesh.position.set(midX, midY, midZ);
-      mesh.rotation.z = angle;
-      mesh.castShadow = true;
-      mesh.receiveShadow = true;
+    const addMeshWithEdges = (
+      geom: THREE.BufferGeometry,
+      mat: THREE.Material,
+      x: number,
+      y: number,
+      z: number,
+      rotZ: number = 0
+    ) => {
+      const mesh = new THREE.Mesh(geom, mat);
+      mesh.position.set(x, y, z);
+      mesh.rotation.z = rotZ;
+      mesh.castShadow = is3D;
+      mesh.receiveShadow = is3D;
 
       const edges = new THREE.EdgesGeometry(geom);
-      const line = new THREE.LineSegments(edges, activeView === '3d' ? edgeMaterial3D : edgeMaterial2D);
-      mesh.add(line);
+      const edgeLine = new THREE.LineSegments(edges, is3D ? edgeMaterial3D : edgeMaterial2D);
+      mesh.add(edgeLine);
+      group.add(mesh);
+      return mesh;
+    };
 
+    // A. PISOS / LAJES (Floors)
+    elements.floors.forEach((fl) => {
+      if (fl.polygon.length < 3) return;
+      const shape = new THREE.Shape();
+      shape.moveTo(fl.polygon[0].x, fl.polygon[0].y);
+      for (let i = 1; i < fl.polygon.length; i++) {
+        shape.lineTo(fl.polygon[i].x, fl.polygon[i].y);
+      }
+      shape.closePath();
+
+      const thickness = fl.thickness || 0.15;
+      const extrudeSettings = { depth: thickness, bevelEnabled: false };
+      const geom = new THREE.ExtrudeGeometry(shape, extrudeSettings);
+      const elev = (fl.elevationOffset || 0) - (is3D ? thickness : 0.05);
+
+      const mesh = new THREE.Mesh(geom, floorMaterial);
+      mesh.position.set(0, 0, elev);
+      mesh.receiveShadow = is3D;
+
+      const edges = new THREE.EdgesGeometry(geom);
+      const line = new THREE.LineSegments(edges, is3D ? edgeMaterial3D : edgeMaterial2D);
+      mesh.add(line);
       group.add(mesh);
     });
-  }, [elements.walls, activeView]);
+
+    // B. TELHADOS / COBERTURAS (Roofs)
+    elements.roofs.forEach((rf) => {
+      if (rf.polygon.length < 3) return;
+      const shape = new THREE.Shape();
+      shape.moveTo(rf.polygon[0].x, rf.polygon[0].y);
+      for (let i = 1; i < rf.polygon.length; i++) {
+        shape.lineTo(rf.polygon[i].x, rf.polygon[i].y);
+      }
+      shape.closePath();
+
+      const geom = new THREE.ExtrudeGeometry(shape, { depth: 0.2, bevelEnabled: false });
+      const mesh = new THREE.Mesh(geom, roofMaterial);
+      mesh.position.set(0, 0, is3D ? 2.8 : 0.1);
+      mesh.castShadow = is3D;
+      mesh.receiveShadow = is3D;
+
+      const edges = new THREE.EdgesGeometry(geom);
+      mesh.add(new THREE.LineSegments(edges, is3D ? edgeMaterial3D : edgeMaterial2D));
+      group.add(mesh);
+    });
+
+    // C. ESCADAS PARAMÉTRICAS (Fórmula de Blondel)
+    elements.stairs.forEach((st) => {
+      const dx = st.end.x - st.start.x;
+      const dy = st.end.y - st.start.y;
+      const totalLen = Math.sqrt(dx * dx + dy * dy);
+      if (totalLen < 0.2) return;
+
+      const angle = Math.atan2(dy, dx);
+      const totalRise = 2.8;
+      const steps = Math.max(2, Math.round(totalRise / (st.riserHeight || 0.175)));
+      const riser = totalRise / steps;
+      const stepLength = totalLen / steps;
+      const width = st.width || 0.9;
+
+      for (let s = 0; s < steps; s++) {
+        const distFromStart = (s + 0.5) * stepLength;
+        const sx = st.start.x + (dx / totalLen) * distFromStart;
+        const sy = st.start.y + (dy / totalLen) * distFromStart;
+
+        const stepGeom = new THREE.BoxGeometry(stepLength, width, is3D ? riser * (s + 1) : 0.05);
+        addMeshWithEdges(
+          stepGeom,
+          stairMaterial,
+          sx,
+          sy,
+          is3D ? (riser * (s + 1)) / 2 : 0.02,
+          angle
+        );
+      }
+    });
+
+    // D. PAREDES COM VÃOS DE PORTAS E JANELAS + DINTÉIS + PEITORIS
+    elements.walls.forEach((wall) => {
+      const dx = wall.end.x - wall.start.x;
+      const dy = wall.end.y - wall.start.y;
+      const wallLen = Math.sqrt(dx * dx + dy * dy);
+      if (wallLen < 0.02) return;
+
+      const angle = Math.atan2(dy, dx);
+      const wallHeight = wall.height;
+      const wallThickness = wall.thickness;
+      const openings = getWallOpenings(wall, elements.doors, elements.windows);
+      const solidSegments = getSolidWallSegments(wall, openings);
+
+      // 1. Segmentos Sólidos de Alvenaria
+      solidSegments.forEach((seg) => {
+        if (seg.length < 0.02) return;
+        const segMidX = (seg.start.x + seg.end.x) / 2;
+        const segMidY = (seg.start.y + seg.end.y) / 2;
+        const segGeom = new THREE.BoxGeometry(seg.length, wallThickness, wallHeight);
+        addMeshWithEdges(
+          segGeom,
+          is3D ? wall3DMaterial : wall2DMaterial,
+          segMidX,
+          segMidY,
+          wallHeight / 2,
+          angle
+        );
+      });
+
+      // 2. Vãos com Dintel, Peitoril, Janelas e Portas
+      openings.forEach((op) => {
+        const opCenterX = wall.start.x + (dx / wallLen) * (op.centerRatio * wallLen);
+        const opCenterY = wall.start.y + (dy / wallLen) * (op.centerRatio * wallLen);
+
+        if (op.type === 'window') {
+          const win = op.element as any;
+          const sillH = win.sillHeight || 1.1;
+          const winH = win.height || 1.0;
+          const dintelH = Math.max(0, wallHeight - (sillH + winH));
+
+          if (is3D) {
+            // Peitoril da Janela
+            if (sillH > 0.02) {
+              const sillGeom = new THREE.BoxGeometry(op.width, wallThickness, sillH);
+              addMeshWithEdges(sillGeom, sillMaterial, opCenterX, opCenterY, sillH / 2, angle);
+            }
+
+            // Dintel (Viga acima da janela)
+            if (dintelH > 0.02) {
+              const dintelGeom = new THREE.BoxGeometry(op.width, wallThickness, dintelH);
+              addMeshWithEdges(
+                dintelGeom,
+                wall3DMaterial,
+                opCenterX,
+                opCenterY,
+                sillH + winH + dintelH / 2,
+                angle
+              );
+            }
+
+            // Esquadria da Janela (Frame)
+            const frameGeom = new THREE.BoxGeometry(op.width, wallThickness * 0.5, winH);
+            addMeshWithEdges(frameGeom, frameMaterial, opCenterX, opCenterY, sillH + winH / 2, angle);
+
+            // Vidro Translúcido
+            const glassGeom = new THREE.BoxGeometry(
+              Math.max(0.1, op.width - 0.08),
+              0.02,
+              Math.max(0.1, winH - 0.08)
+            );
+            addMeshWithEdges(glassGeom, glassMaterial, opCenterX, opCenterY, sillH + winH / 2, angle);
+          } else {
+            // Representação 2D da Janela (peitoril + linhas de vidro centrais)
+            const sillGeom2D = new THREE.BoxGeometry(op.width, wallThickness, 0.02);
+            addMeshWithEdges(sillGeom2D, wall2DMaterial, opCenterX, opCenterY, 0.01, angle);
+
+            const glassLineGeom = new THREE.BoxGeometry(op.width, 0.02, 0.05);
+            addMeshWithEdges(glassLineGeom, glassMaterial, opCenterX, opCenterY, 0.02, angle);
+          }
+        } else if (op.type === 'door') {
+          const door = op.element as any;
+          const doorH = door.height || 2.1;
+          const dintelH = Math.max(0, wallHeight - doorH);
+
+          if (is3D) {
+            // Dintel acima da Porta
+            if (dintelH > 0.02) {
+              const dintelGeom = new THREE.BoxGeometry(op.width, wallThickness, dintelH);
+              addMeshWithEdges(
+                dintelGeom,
+                wall3DMaterial,
+                opCenterX,
+                opCenterY,
+                doorH + dintelH / 2,
+                angle
+              );
+            }
+
+            // Batentes Laterais da Porta
+            const postW = 0.04;
+            const postGeom = new THREE.BoxGeometry(postW, wallThickness, doorH);
+            const leftDist = op.centerRatio * wallLen - op.width / 2 + postW / 2;
+            const rightDist = op.centerRatio * wallLen + op.width / 2 - postW / 2;
+            const lx = wall.start.x + (dx / wallLen) * leftDist;
+            const ly = wall.start.y + (dy / wallLen) * leftDist;
+            const rx = wall.start.x + (dx / wallLen) * rightDist;
+            const ry = wall.start.y + (dy / wallLen) * rightDist;
+            addMeshWithEdges(postGeom, frameMaterial, lx, ly, doorH / 2, angle);
+            addMeshWithEdges(postGeom, frameMaterial, rx, ry, doorH / 2, angle);
+
+            // Folha da Porta (aberta a 75 graus)
+            const leafWidth = op.width - postW * 2;
+            const leafGeom = new THREE.BoxGeometry(leafWidth, 0.035, doorH - 0.02);
+            const swingAngle = door.flipFacing ? -Math.PI / 2.3 : Math.PI / 2.3;
+            addMeshWithEdges(
+              leafGeom,
+              doorLeafMaterial,
+              lx,
+              ly,
+              doorH / 2,
+              angle + swingAngle
+            );
+          } else {
+            // No 2D, a porta deixa o vão completamente livre na parede física
+            // O batente e o arco de abertura NBR são desenhados com perfeição no Canvas 2D
+          }
+        }
+      });
+    });
+
+    // E. JUNÇÕES MITER MONOLÍTICAS NOS CANTOS DAS PAREDES
+    // Elimina arestas pretas cruzadas ou vácuos entre paredes adjacentes
+    const joints = findWallJoints(elements.walls);
+    joints.forEach((joint) => {
+      const radius = joint.thickness / 2;
+      const cornerGeom = new THREE.CylinderGeometry(
+        radius,
+        radius,
+        2.8,
+        16
+      );
+      // Três.js Cylinder é alinhado no eixo Y, rotacionamos para o eixo Z (altura)
+      cornerGeom.rotateX(Math.PI / 2);
+      const cornerMesh = new THREE.Mesh(
+        cornerGeom,
+        is3D ? wall3DMaterial : wall2DMaterial
+      );
+      cornerMesh.position.set(joint.point.x, joint.point.y, 1.4);
+      cornerMesh.castShadow = is3D;
+      cornerMesh.receiveShadow = is3D;
+      group.add(cornerMesh);
+    });
+  }, [
+    elements.walls,
+    elements.doors,
+    elements.windows,
+    elements.floors,
+    elements.roofs,
+    elements.stairs,
+    activeView,
+  ]);
 
   // 3. Listener nativo de Wheel (sem aviso de passive event listener)
   useEffect(() => {
