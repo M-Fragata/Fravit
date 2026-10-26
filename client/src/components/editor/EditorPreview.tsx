@@ -7,6 +7,7 @@ import { CADViewport } from '../canvas/CADViewport';
 import { CADToolbar } from '../layout/CADToolbar';
 import { CADStatusBar } from '../layout/CADStatusBar';
 import { PropertiesPanel } from '../properties/PropertiesPanel';
+import { SheetView } from '../sheets/SheetView';
 import {
   ArrowLeft,
   Save,
@@ -33,7 +34,7 @@ export const EditorPreview: React.FC<EditorPreviewProps> = ({ projectId, onBack 
   const [newLevelElevation, setNewLevelElevation] = useState('2.80');
   const [newLevelHeight, setNewLevelHeight] = useState('2.80');
 
-  const { activeView, levels, activeLevelId, elements, activeSectionId } = useBIM();
+  const { activeView, levels, activeLevelId, elements, activeSectionId, sheets, activeSheetId } = useBIM();
 
   useEffect(() => {
     let isMounted = true;
@@ -73,7 +74,8 @@ export const EditorPreview: React.FC<EditorPreviewProps> = ({ projectId, onBack 
         activeLevelId,
         levels,
         elements,
-        sheets: [],
+        sheets,
+        activeSheetId,
       };
 
       await projectService.update(project.id, {
@@ -84,7 +86,7 @@ export const EditorPreview: React.FC<EditorPreviewProps> = ({ projectId, onBack 
     } catch (err: any) {
       alert(err.message || 'Erro ao salvar projeto.');
     }
-  }, [project, activeLevelId, levels, elements]);
+  }, [project, activeLevelId, levels, elements, sheets, activeSheetId]);
 
   // Atalhos Globais de Teclado (Ctrl+Z para Desfazer, Ctrl+Shift+Z / Ctrl+Y para Refazer, Ctrl+S para Salvar)
   useEffect(() => {
@@ -302,7 +304,7 @@ export const EditorPreview: React.FC<EditorPreviewProps> = ({ projectId, onBack 
           <button
             className="btn-secondary"
             style={{ padding: '6px 12px', fontSize: '13px' }}
-            onClick={() => projectService.exportToFile(project, { ...project.bimData, elements })}
+            onClick={() => projectService.exportToFile(project, { ...project.bimData, elements, levels, sheets, activeSheetId })}
             title="Download .fravit"
           >
             <Download size={15} />
@@ -678,20 +680,89 @@ export const EditorPreview: React.FC<EditorPreviewProps> = ({ projectId, onBack 
 
             {/* Pranchas de Impressão */}
             <div>
-              <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--cad-cyan)', textTransform: 'uppercase', marginBottom: 8 }}>
-                Pranchas de Impressão
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+                <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--cad-cyan)', textTransform: 'uppercase' }}>
+                  Pranchas de Impressão
+                </span>
+                <button
+                  onClick={() => {
+                    const num = sheets.length + 1;
+                    const newSheetId = `sheet-${Date.now()}`;
+                    bimStore.addSheet({
+                      id: newSheetId,
+                      name: `A10${num} - Folha ${num}`,
+                      size: 'A1',
+                      orientation: 'landscape',
+                      stamp: {
+                        projectTitle: project?.title || 'PROJETO ARQUITETÔNICO',
+                        clientName: 'CLIENTE',
+                        authorName: 'FRAVIT CAD/BIM',
+                        sheetNumber: `0${num}/0${num}`,
+                        sheetTitle: 'PLANTAS, CORTES E QUADROS',
+                        date: new Date().toLocaleDateString('pt-BR'),
+                        scale: 'INDICADA',
+                      },
+                      viewports: [],
+                      showSchedules: true,
+                    });
+                    bimStore.setActiveView('sheet');
+                  }}
+                  title="Criar nova prancha"
+                  style={{
+                    background: 'transparent',
+                    border: 'none',
+                    color: 'var(--text-dim)',
+                    cursor: 'pointer',
+                    padding: '2px 4px',
+                    borderRadius: '3px',
+                    display: 'flex',
+                    alignItems: 'center',
+                  }}
+                >
+                  <Plus size={14} />
+                </button>
               </div>
-              <div style={{ fontSize: '12px', color: 'var(--text-muted)', padding: '6px 10px', display: 'flex', alignItems: 'center', gap: 6 }}>
-                <Layers size={13} />
-                <span>A101 - Folha Principal</span>
-              </div>
+
+              {sheets.map((s) => {
+                const isCurrent = activeView === 'sheet' && activeSheetId === s.id;
+                return (
+                  <div
+                    key={s.id}
+                    onClick={() => {
+                      bimStore.setActiveSheetId(s.id);
+                      bimStore.setActiveView('sheet');
+                    }}
+                    style={{
+                      padding: '8px 10px',
+                      borderRadius: 'var(--radius-sm)',
+                      background: isCurrent ? 'rgba(56, 189, 248, 0.15)' : 'transparent',
+                      border: `1px solid ${isCurrent ? 'var(--cad-cyan)' : 'transparent'}`,
+                      fontSize: '12px',
+                      cursor: 'pointer',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 6,
+                      marginBottom: 4,
+                    }}
+                  >
+                    <Layers size={13} style={{ color: isCurrent ? 'var(--cad-cyan)' : 'var(--text-dim)' }} />
+                    <span style={{ fontWeight: isCurrent ? 600 : 400, color: isCurrent ? 'var(--cad-cyan)' : 'inherit' }}>
+                      {s.name}
+                    </span>
+                  </div>
+                );
+              })}
             </div>
           </div>
         </aside>
 
-        {/* Viewport Central Three.js com Overlay Canvas */}
+        {/* Viewport Central Three.js ou Prancha Técnica Interativa */}
         <main style={{ flex: 1, position: 'relative', overflow: 'hidden' }}>
-          <CADViewport onCursorMove={(pos) => setCursorPos(pos)} />
+          {activeView === 'sheet' ? (
+            <SheetView />
+          ) : (
+            <CADViewport onCursorMove={(pos) => setCursorPos(pos)} />
+          )}
         </main>
 
         {/* Painel de Propriedades Paramétricas à Direita */}

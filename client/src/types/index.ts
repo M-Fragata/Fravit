@@ -45,6 +45,7 @@ export interface BIMData {
   levels: BIMLevel[];
   elements: BIMElements;
   sheets: any[];
+  activeSheetId?: string;
 }
 
 export interface ProjectDetail extends ProjectSummary {

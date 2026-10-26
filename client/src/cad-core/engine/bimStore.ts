@@ -13,6 +13,8 @@ import type {
   DimensionElement,
   SectionElement,
   SnapConfig,
+  Sheet,
+  SheetViewport,
 } from '../types';
 
 export interface BIMState {
@@ -21,6 +23,8 @@ export interface BIMState {
   activeTool: ToolType;
   activeView: 'plan' | '3d' | 'section' | 'sheet';
   activeSectionId: string | null;
+  activeSheetId: string;
+  sheets: Sheet[];
   selectedElementIds: string[];
   snapConfig: SnapConfig;
 
@@ -60,6 +64,39 @@ const initialBimState: BIMState = {
   activeTool: 'select',
   activeView: 'plan',
   activeSectionId: null,
+  activeSheetId: 'sheet-1',
+  sheets: [
+    {
+      id: 'sheet-1',
+      name: 'A101 - Folha Principal',
+      size: 'A1',
+      orientation: 'landscape',
+      stamp: {
+        projectTitle: 'PROJETO ARQUITETÔNICO RESIDENCIAL',
+        clientName: 'CLIENTE',
+        authorName: 'FRAVIT CAD/BIM',
+        sheetNumber: '01/01',
+        sheetTitle: 'PLANTAS, CORTES E QUADROS',
+        date: '26/10/2026',
+        scale: 'INDICADA',
+      },
+      viewports: [
+        {
+          id: 'vp-plan-1',
+          type: 'plan',
+          targetId: 'lvl-ground',
+          name: '01 - PLANTA BAIXA TÉRREO',
+          scale: '1:50',
+          x: 45,
+          y: 45,
+          width: 380,
+          height: 260,
+        },
+      ],
+      showSchedules: true,
+      schedulePosition: { x: 460, y: 45 },
+    },
+  ],
   selectedElementIds: [],
   snapConfig: {
     gridSnap: true,
@@ -123,6 +160,76 @@ export const bimStore = {
 
   setActiveView: (view: 'plan' | '3d' | 'section' | 'sheet') => {
     currentState = { ...currentState, activeView: view };
+    emitChange();
+  },
+
+  setActiveSheetId: (sheetId: string) => {
+    currentState = { ...currentState, activeSheetId: sheetId };
+    emitChange();
+  },
+
+  addSheet: (sheet: Sheet) => {
+    currentState = {
+      ...currentState,
+      sheets: [...currentState.sheets, sheet],
+      activeSheetId: sheet.id,
+    };
+    emitChange();
+  },
+
+  updateSheet: (sheetId: string, patch: Partial<Sheet>) => {
+    currentState = {
+      ...currentState,
+      sheets: currentState.sheets.map((s) => (s.id === sheetId ? { ...s, ...patch } : s)),
+    };
+    emitChange();
+  },
+
+  removeSheet: (sheetId: string) => {
+    if (currentState.sheets.length <= 1) return;
+    const newSheets = currentState.sheets.filter((s) => s.id !== sheetId);
+    currentState = {
+      ...currentState,
+      sheets: newSheets,
+      activeSheetId: newSheets[0].id,
+    };
+    emitChange();
+  },
+
+  addViewportToSheet: (sheetId: string, viewport: SheetViewport) => {
+    currentState = {
+      ...currentState,
+      sheets: currentState.sheets.map((s) =>
+        s.id === sheetId ? { ...s, viewports: [...s.viewports, viewport] } : s
+      ),
+    };
+    emitChange();
+  },
+
+  updateViewport: (sheetId: string, viewportId: string, patch: Partial<SheetViewport>) => {
+    currentState = {
+      ...currentState,
+      sheets: currentState.sheets.map((s) =>
+        s.id === sheetId
+          ? {
+              ...s,
+              viewports: s.viewports.map((v) => (v.id === viewportId ? { ...v, ...patch } : v)),
+            }
+          : s
+      ),
+    };
+    emitChange();
+  },
+
+  removeViewport: (sheetId: string, viewportId: string) => {
+    currentState = {
+      ...currentState,
+      sheets: currentState.sheets.map((s) =>
+        s.id === sheetId
+          ? { ...s, viewports: s.viewports.filter((v) => v.id !== viewportId) }
+          : s
+      ),
+    };
     emitChange();
   },
 
@@ -550,6 +657,8 @@ export const bimStore = {
       ...currentState,
       levels: bimData.levels || currentState.levels,
       activeLevelId: bimData.activeLevelId || currentState.activeLevelId,
+      activeSheetId: bimData.activeSheetId || (bimData.sheets?.[0]?.id ?? currentState.activeSheetId),
+      sheets: bimData.sheets || currentState.sheets,
       elements: {
         walls: bimData.elements?.walls || [],
         doors: bimData.elements?.doors || [],

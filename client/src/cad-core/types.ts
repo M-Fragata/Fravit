@@ -171,3 +171,42 @@ export interface BIMLevel {
   elevation: number;
   height: number;
 }
+
+export type SheetSize = 'A1' | 'A2' | 'A3' | 'A4';
+export type SheetOrientation = 'landscape' | 'portrait';
+export type ViewportScale = '1:25' | '1:50' | '1:100' | '1:200';
+export type ViewportType = 'plan' | 'section' | '3d';
+
+export interface SheetViewport {
+  id: string;
+  type: ViewportType;
+  targetId?: string; // id do level ou id da section
+  name: string;
+  scale: ViewportScale;
+  x: number; // posição X na prancha em mm
+  y: number; // posição Y na prancha em mm
+  width: number; // largura da viewport em mm
+  height: number; // altura da viewport em mm
+}
+
+export interface SheetStamp {
+  projectTitle: string;
+  clientName: string;
+  authorName: string;
+  sheetNumber: string; // ex: "01/01" ou "A101"
+  sheetTitle: string; // ex: "PLANTAS, CORTES E QUADROS"
+  date: string;
+  scale: string; // ex: "INDICADA"
+}
+
+export interface Sheet {
+  id: string;
+  name: string;
+  size: SheetSize;
+  orientation: SheetOrientation;
+  stamp: SheetStamp;
+  viewports: SheetViewport[];
+  showSchedules: boolean;
+  schedulePosition?: { x: number; y: number };
+}
+
