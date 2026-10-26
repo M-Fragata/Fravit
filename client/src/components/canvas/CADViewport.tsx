@@ -876,54 +876,6 @@ export const CADViewport: React.FC<CADViewportProps> = ({ onCursorMove }) => {
         />
       )}
 
-      {/* Banner / HUD Informativo Normativo na Vista de Corte */}
-      {activeView === 'section' && (
-        <div
-          style={{
-            position: 'absolute',
-            top: 14,
-            left: '50%',
-            transform: 'translateX(-50%)',
-            background: 'rgba(15, 23, 42, 0.92)',
-            border: '1px solid rgba(56, 189, 248, 0.4)',
-            backdropFilter: 'blur(8px)',
-            borderRadius: '9999px',
-            padding: '6px 16px',
-            display: 'flex',
-            alignItems: 'center',
-            gap: 12,
-            boxShadow: '0 8px 24px rgba(0, 0, 0, 0.45)',
-            zIndex: 20,
-          }}
-        >
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-            <span style={{ width: 8, height: 8, borderRadius: '50%', background: 'var(--cad-cyan)', display: 'inline-block' }} />
-            <span style={{ fontSize: '12px', fontWeight: 600, color: '#f8fafc' }}>
-              Vista de Corte: {elements.sections.find((s) => s.id === activeSectionId)?.name || 'Corte A-A'}
-            </span>
-          </div>
-          <span style={{ fontSize: '11px', color: 'var(--text-dim)' }}>
-            Arraste com o mouse para mover • Roda do mouse para zoom
-          </span>
-          <button
-            onClick={() => bimStore.setActiveView('plan')}
-            style={{
-              background: 'rgba(56, 189, 248, 0.15)',
-              border: '1px solid rgba(56, 189, 248, 0.35)',
-              borderRadius: '9999px',
-              color: 'var(--cad-cyan)',
-              fontSize: '11px',
-              fontWeight: 600,
-              padding: '2px 10px',
-              cursor: 'pointer',
-              display: 'flex',
-              alignItems: 'center',
-            }}
-          >
-            ✕ Voltar à Planta
-          </button>
-        </div>
-      )}
     </div>
   );
 };
