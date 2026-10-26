@@ -1,4 +1,4 @@
-import React, { useRef, useEffect, useState, useCallback } from 'react';
+import React, { useRef, useEffect, useCallback, useState } from 'react';
 import * as THREE from 'three';
 import { useBIM } from '../../cad-core/engine/bimStore';
 import type { Point2D, WallElement } from '../../cad-core/types';
@@ -14,9 +14,13 @@ export const CADViewport: React.FC<CADViewportProps> = ({ onCursorMove }) => {
   const state = useBIM();
   const { activeView, elements } = state;
 
-  // Transformações da Câmera 2D (Pan & Zoom)
-  const [zoom2D, setZoom2D] = useState<number>(60); // pixels por metro
-  const [pan2D, setPan2D] = useState<Point2D>({ x: 0, y: 0 });
+  // Refs mutáveis para garantir sincronização de alta precisão entre Three.js e CanvasOverlay (evitando closure staleness)
+  const panRef = useRef<Point2D>({ x: 0, y: 0 });
+  const zoomRef = useRef<number>(60); // pixels por metro
+
+  // Estado de renderização para acionar re-render do overlay quando pan/zoom mudar
+  const [, setViewportTick] = useState<number>(0);
+  const triggerRender = useCallback(() => setViewportTick((t) => (t + 1) % 1000000), []);
 
   // Referências Three.js
   const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
@@ -42,15 +46,14 @@ export const CADViewport: React.FC<CADViewportProps> = ({ onCursorMove }) => {
     const width = containerRef.current.clientWidth || 800;
     const height = containerRef.current.clientHeight || 600;
 
-    // Renderer com correção de ShadowMap para versões modernas do Three.js
+    // Renderer
     const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
     renderer.setSize(width, height);
     renderer.setPixelRatio(window.devicePixelRatio || 1);
     renderer.shadowMap.enabled = true;
-    renderer.shadowMap.type = THREE.PCFShadowMap; // Substitui PCFSoftShadowMap obsoleto
+    renderer.shadowMap.type = THREE.PCFShadowMap;
     renderer.localClippingEnabled = true;
 
-    // Montar no sub-container dedicado (sem apagar React)
     mount.innerHTML = '';
     mount.appendChild(renderer.domElement);
     rendererRef.current = renderer;
@@ -62,7 +65,7 @@ export const CADViewport: React.FC<CADViewportProps> = ({ onCursorMove }) => {
 
     // Câmera Ortográfica 2D (Top-Down)
     const aspect = width / height;
-    const frustumSize = height / zoom2D;
+    const frustumSize = height / zoomRef.current;
     const orthoCam = new THREE.OrthographicCamera(
       (-frustumSize * aspect) / 2,
       (frustumSize * aspect) / 2,
@@ -71,8 +74,8 @@ export const CADViewport: React.FC<CADViewportProps> = ({ onCursorMove }) => {
       0.1,
       1000
     );
-    orthoCam.position.set(pan2D.x, pan2D.y, 200);
-    orthoCam.lookAt(pan2D.x, pan2D.y, 0);
+    orthoCam.position.set(panRef.current.x, panRef.current.y, 200);
+    orthoCam.lookAt(panRef.current.x, panRef.current.y, 0);
     orthoCam.up.set(0, 1, 0);
     orthoCameraRef.current = orthoCam;
 
@@ -88,8 +91,6 @@ export const CADViewport: React.FC<CADViewportProps> = ({ onCursorMove }) => {
     const dirLight = new THREE.DirectionalLight(0xffffff, 1.2);
     dirLight.position.set(15, 20, 25);
     dirLight.castShadow = true;
-    dirLight.shadow.mapSize.width = 2048;
-    dirLight.shadow.mapSize.height = 2048;
     scene.add(dirLight);
 
     const fillLight = new THREE.DirectionalLight(0x38bdf8, 0.35);
@@ -101,16 +102,30 @@ export const CADViewport: React.FC<CADViewportProps> = ({ onCursorMove }) => {
     scene.add(wallGroup);
     wallGroupRef.current = wallGroup;
 
-    // Grid e Eixos 3D
-    const grid3D = new THREE.GridHelper(50, 50, 0x38bdf8, 0x1f293d);
+    // Grid técnico suave (sem linha central brilhante que cruza o mapa todo)
+    const grid3D = new THREE.GridHelper(60, 60, 0x1e293b, 0x162032);
     grid3D.rotation.x = Math.PI / 2;
     grid3D.position.z = -0.01;
     scene.add(grid3D);
 
-    const axesHelper = new THREE.AxesHelper(2);
-    scene.add(axesHelper);
+    // Eixos Cartesianos compactos: estendem-se por 5 quadrados (5 metros) em cada direção
+    const axisGroup = new THREE.Group();
 
-    // Loop de Renderização
+    // Eixo X: -5m a +5m (vermelho)
+    const xPoints = [new THREE.Vector3(-5, 0, 0.01), new THREE.Vector3(5, 0, 0.01)];
+    const xGeom = new THREE.BufferGeometry().setFromPoints(xPoints);
+    const xMat = new THREE.LineBasicMaterial({ color: 0xef4444, linewidth: 2 });
+    axisGroup.add(new THREE.Line(xGeom, xMat));
+
+    // Eixo Y: -5m a +5m (verde)
+    const yPoints = [new THREE.Vector3(0, -5, 0.01), new THREE.Vector3(0, 5, 0.01)];
+    const yGeom = new THREE.BufferGeometry().setFromPoints(yPoints);
+    const yMat = new THREE.LineBasicMaterial({ color: 0x10b981, linewidth: 2 });
+    axisGroup.add(new THREE.Line(yGeom, yMat));
+
+    scene.add(axisGroup);
+
+    // Loop de Renderização com sincronização ativa de refs
     let animationId: number;
     const animate = () => {
       animationId = requestAnimationFrame(animate);
@@ -123,8 +138,22 @@ export const CADViewport: React.FC<CADViewportProps> = ({ onCursorMove }) => {
         perspCam.lookAt(o.target);
         renderer.render(scene, perspCam);
       } else {
-        orthoCam.position.set(pan2D.x, pan2D.y, 200);
-        orthoCam.lookAt(pan2D.x, pan2D.y, 0);
+        // Atualiza a câmera ortográfica 2D dinamicamente com base nas refs (sem atraso de closure)
+        const pan = panRef.current;
+        const zoom = zoomRef.current;
+        const curHeight = containerRef.current?.clientHeight || 600;
+        const curWidth = containerRef.current?.clientWidth || 800;
+        const curAspect = curWidth / curHeight;
+        const fSize = curHeight / zoom;
+
+        orthoCam.left = (-fSize * curAspect) / 2;
+        orthoCam.right = (fSize * curAspect) / 2;
+        orthoCam.top = fSize / 2;
+        orthoCam.bottom = -fSize / 2;
+        orthoCam.position.set(pan.x, pan.y, 200);
+        orthoCam.lookAt(pan.x, pan.y, 0);
+        orthoCam.updateProjectionMatrix();
+
         renderer.render(scene, orthoCam);
       }
     };
@@ -139,7 +168,7 @@ export const CADViewport: React.FC<CADViewportProps> = ({ onCursorMove }) => {
 
       renderer.setSize(w, h);
 
-      const newFrustum = h / zoom2D;
+      const newFrustum = h / zoomRef.current;
       orthoCam.left = (-newFrustum * newAspect) / 2;
       orthoCam.right = (newFrustum * newAspect) / 2;
       orthoCam.top = newFrustum / 2;
@@ -159,25 +188,7 @@ export const CADViewport: React.FC<CADViewportProps> = ({ onCursorMove }) => {
     };
   }, [activeView]);
 
-  // 2. Atualizar Parâmetros da Câmera 2D ao mudar Zoom e Pan
-  useEffect(() => {
-    if (!orthoCameraRef.current || !containerRef.current) return;
-    const w = containerRef.current.clientWidth;
-    const h = containerRef.current.clientHeight;
-    const aspect = w / h;
-    const frustumSize = h / zoom2D;
-
-    const cam = orthoCameraRef.current;
-    cam.left = (-frustumSize * aspect) / 2;
-    cam.right = (frustumSize * aspect) / 2;
-    cam.top = frustumSize / 2;
-    cam.bottom = -frustumSize / 2;
-    cam.position.set(pan2D.x, pan2D.y, 200);
-    cam.lookAt(pan2D.x, pan2D.y, 0);
-    cam.updateProjectionMatrix();
-  }, [zoom2D, pan2D]);
-
-  // 3. Reconstruir Geometria 3D e 2D das Paredes com Alto Contraste
+  // 2. Reconstruir Geometria 3D e 2D das Paredes com Alto Contraste
   useEffect(() => {
     if (!wallGroupRef.current) return;
     const group = wallGroupRef.current;
@@ -204,13 +215,12 @@ export const CADViewport: React.FC<CADViewportProps> = ({ onCursorMove }) => {
       linewidth: 2,
     });
 
-    // Material 2D com preenchimento cinza e bordas nítidas
     const wall2DMaterial = new THREE.MeshBasicMaterial({
       color: 0x334155,
     });
 
     const edgeMaterial2D = new THREE.LineBasicMaterial({
-      color: 0x94a3b8,
+      color: 0x38bdf8,
       linewidth: 2,
     });
 
@@ -232,7 +242,6 @@ export const CADViewport: React.FC<CADViewportProps> = ({ onCursorMove }) => {
       mesh.castShadow = true;
       mesh.receiveShadow = true;
 
-      // Bordas destacadas tanto no 2D quanto no 3D
       const edges = new THREE.EdgesGeometry(geom);
       const line = new THREE.LineSegments(edges, activeView === '3d' ? edgeMaterial3D : edgeMaterial2D);
       mesh.add(line);
@@ -241,7 +250,7 @@ export const CADViewport: React.FC<CADViewportProps> = ({ onCursorMove }) => {
     });
   }, [elements.walls, activeView]);
 
-  // 4. Listener de Wheel não-passivo para evitar erro de preventDefault
+  // 3. Listener nativo de Wheel (sem aviso de passive event listener)
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
@@ -254,60 +263,55 @@ export const CADViewport: React.FC<CADViewportProps> = ({ onCursorMove }) => {
         orbitRef.current.radius = Math.max(2, Math.min(80, orbitRef.current.radius * factor));
       } else {
         const zoomFactor = e.deltaY < 0 ? 1.15 : 0.85;
-        const newZoom = Math.max(10, Math.min(300, zoom2D * zoomFactor));
+        const oldZoom = zoomRef.current;
+        const newZoom = Math.max(10, Math.min(300, oldZoom * zoomFactor));
 
         const rect = container.getBoundingClientRect();
         const mouseX = e.clientX - rect.left - rect.width / 2;
         const mouseY = e.clientY - rect.top - rect.height / 2;
 
-        const worldMouseBeforeX = pan2D.x + mouseX / zoom2D;
-        const worldMouseBeforeY = pan2D.y - mouseY / zoom2D;
+        const worldMouseBeforeX = panRef.current.x + mouseX / oldZoom;
+        const worldMouseBeforeY = panRef.current.y - mouseY / oldZoom;
 
-        const newPanX = worldMouseBeforeX - mouseX / newZoom;
-        const newPanY = worldMouseBeforeY + mouseY / newZoom;
+        panRef.current.x = worldMouseBeforeX - mouseX / newZoom;
+        panRef.current.y = worldMouseBeforeY + mouseY / newZoom;
+        zoomRef.current = newZoom;
 
-        setZoom2D(newZoom);
-        setPan2D({ x: newPanX, y: newPanY });
+        triggerRender();
       }
     };
 
     container.addEventListener('wheel', onWheel, { passive: false });
     return () => container.removeEventListener('wheel', onWheel);
-  }, [activeView, zoom2D, pan2D]);
+  }, [activeView, triggerRender]);
 
-  // Conversores de Coordenadas: Tela <-> Mundo
-  const screenToWorld = useCallback(
-    (screenX: number, screenY: number): Point2D => {
-      if (!containerRef.current) return { x: 0, y: 0 };
-      const rect = containerRef.current.getBoundingClientRect();
-      const relX = screenX - rect.left;
-      const relY = screenY - rect.top;
+  // Conversores de Coordenadas: Tela <-> Mundo (baseados em refs em tempo real)
+  const screenToWorld = useCallback((screenX: number, screenY: number): Point2D => {
+    if (!containerRef.current) return { x: 0, y: 0 };
+    const rect = containerRef.current.getBoundingClientRect();
+    const relX = screenX - rect.left;
+    const relY = screenY - rect.top;
 
-      const centerX = rect.width / 2;
-      const centerY = rect.height / 2;
+    const centerX = rect.width / 2;
+    const centerY = rect.height / 2;
 
-      const worldX = pan2D.x + (relX - centerX) / zoom2D;
-      const worldY = pan2D.y - (relY - centerY) / zoom2D;
+    const worldX = panRef.current.x + (relX - centerX) / zoomRef.current;
+    const worldY = panRef.current.y - (relY - centerY) / zoomRef.current;
 
-      return { x: worldX, y: worldY };
-    },
-    [pan2D, zoom2D]
-  );
+    return { x: worldX, y: worldY };
+  }, []);
 
-  const worldToScreen = useCallback(
-    (worldX: number, worldY: number): Point2D => {
-      if (!containerRef.current) return { x: 0, y: 0 };
-      const rect = containerRef.current.getBoundingClientRect();
-      const centerX = rect.width / 2;
-      const centerY = rect.height / 2;
+  const worldToScreen = useCallback((worldX: number, worldY: number): Point2D => {
+    if (!containerRef.current) return { x: 0, y: 0 };
+    const rect = containerRef.current.getBoundingClientRect();
+    const centerX = rect.width / 2;
+    const centerY = rect.height / 2;
 
-      const screenX = centerX + (worldX - pan2D.x) * zoom2D;
-      const screenY = centerY - (worldY - pan2D.y) * zoom2D;
+    const screenX = centerX + (worldX - panRef.current.x) * zoomRef.current;
+    const screenY = centerY - (worldY - panRef.current.y) * zoomRef.current;
 
-      return { x: screenX, y: screenY };
-    },
-    [pan2D, zoom2D]
-  );
+    return { x: screenX, y: screenY };
+  }, []);
 
   // Manipulação de Mouse no modo 3D
   const handleMouseDown3D = (e: React.MouseEvent) => {
@@ -359,9 +363,9 @@ export const CADViewport: React.FC<CADViewportProps> = ({ onCursorMove }) => {
       {/* Overlay 2D Interativo (Snaps, Pan/Zoom e Desenho de Paredes) */}
       {activeView !== '3d' && (
         <CanvasOverlay
-          zoom={zoom2D}
-          pan={pan2D}
-          setPan={setPan2D}
+          panRef={panRef}
+          zoomRef={zoomRef}
+          triggerRender={triggerRender}
           screenToWorld={screenToWorld}
           worldToScreen={worldToScreen}
           onCursorMove={onCursorMove}

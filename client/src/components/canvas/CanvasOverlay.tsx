@@ -4,17 +4,18 @@ import { computeSnap, distance } from '../../cad-core/snaps/snapEngine';
 import type { Point2D, SnapResult, WallElement } from '../../cad-core/types';
 
 interface CanvasOverlayProps {
-  zoom: number;
-  pan: Point2D;
-  setPan: React.Dispatch<React.SetStateAction<Point2D>>;
+  panRef: React.MutableRefObject<Point2D>;
+  zoomRef: React.MutableRefObject<number>;
+  triggerRender: () => void;
   screenToWorld: (x: number, y: number) => Point2D;
   worldToScreen: (x: number, y: number) => Point2D;
   onCursorMove?: (worldPos: Point2D) => void;
 }
 
 export const CanvasOverlay: React.FC<CanvasOverlayProps> = ({
-  zoom,
-  setPan,
+  panRef,
+  zoomRef,
+  triggerRender,
   screenToWorld,
   worldToScreen,
   onCursorMove,
@@ -29,10 +30,12 @@ export const CanvasOverlay: React.FC<CanvasOverlayProps> = ({
   const [numericInput, setNumericInput] = useState<string>('');
 
   const mousePosScreenRef = useRef<{ x: number; y: number }>({ x: -100, y: -100 });
+  const [isPanning, setIsPanning] = useState<boolean>(false);
   const isPanningRef = useRef<boolean>(false);
-  const lastPanMouseRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
+  const startPanMouseRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
+  const isSpacePressedRef = useRef<boolean>(false);
 
-  // 1. Manter dimensões do Canvas sincronizadas com o container via ResizeObserver
+  // 1. Manter dimensões do Canvas sincronizadas com o container
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas || !canvas.parentElement) return;
@@ -65,6 +68,7 @@ export const CanvasOverlay: React.FC<CanvasOverlayProps> = ({
 
       const mouse = mousePosScreenRef.current;
       const snapped = currentSnapped?.point;
+      const zoom = zoomRef.current;
 
       if (snapped) {
         const screenSnap = worldToScreen(snapped.x, snapped.y);
@@ -148,7 +152,7 @@ export const CanvasOverlay: React.FC<CanvasOverlayProps> = ({
       }
 
       // D. Mira Técnica CAD (Crosshair)
-      if (mouse.x > 0 && mouse.y > 0) {
+      if (mouse.x > 0 && mouse.y > 0 && !isPanningRef.current) {
         ctx.strokeStyle = 'rgba(255, 255, 255, 0.4)';
         ctx.lineWidth = 1;
 
@@ -168,26 +172,28 @@ export const CanvasOverlay: React.FC<CanvasOverlayProps> = ({
 
     animId = requestAnimationFrame(render);
     return () => cancelAnimationFrame(animId);
-  }, [drawingStart, currentSnapped, activeTool, defaults, worldToScreen, zoom]);
+  }, [drawingStart, currentSnapped, activeTool, defaults, worldToScreen, zoomRef]);
 
-  // 3. Captura Global de Teclado (F8 para Orto, Escape para Cancelar, Entrada Numérica direta)
+  // 3. Captura Global de Teclado (F8 para Orto, Escape para Cancelar, Tecla Espaço para Pan, Entrada Numérica direta)
   useEffect(() => {
     const handleGlobalKeyDown = (e: KeyboardEvent) => {
-      // Alternar Modo Orto com tecla F8
+      if (e.code === 'Space') {
+        isSpacePressedRef.current = true;
+      }
+
       if (e.key === 'F8') {
         e.preventDefault();
         bimStore.toggleOrtho();
         return;
       }
 
-      // Cancelar desenho com tecla Escape
       if (e.key === 'Escape') {
         setDrawingStart(null);
         setNumericInput('');
         return;
       }
 
-      // Digitar medidas diretamente no teclado durante o desenho
+      // Entrada numérica direta ao desenhar
       if (drawingStart && activeTool === 'wall') {
         if ((e.key >= '0' && e.key <= '9') || e.key === '.' || e.key === ',') {
           const char = e.key === ',' ? '.' : e.key;
@@ -195,7 +201,6 @@ export const CanvasOverlay: React.FC<CanvasOverlayProps> = ({
         } else if (e.key === 'Backspace') {
           setNumericInput((prev) => prev.slice(0, -1));
         } else if (e.key === 'Enter') {
-          // Confirmar comprimento digitado
           const targetLength = parseFloat(numericInput);
           if (!isNaN(targetLength) && targetLength > 0.05 && currentSnapped) {
             const dx = currentSnapped.point.x - drawingStart.x;
@@ -230,59 +235,46 @@ export const CanvasOverlay: React.FC<CanvasOverlayProps> = ({
       }
     };
 
+    const handleGlobalKeyUp = (e: KeyboardEvent) => {
+      if (e.code === 'Space') {
+        isSpacePressedRef.current = false;
+      }
+    };
+
     window.addEventListener('keydown', handleGlobalKeyDown);
-    return () => window.removeEventListener('keydown', handleGlobalKeyDown);
+    window.addEventListener('keyup', handleGlobalKeyUp);
+    return () => {
+      window.removeEventListener('keydown', handleGlobalKeyDown);
+      window.removeEventListener('keyup', handleGlobalKeyUp);
+    };
   }, [drawingStart, currentSnapped, numericInput, activeTool, defaults, activeLevelId]);
 
-  // Manipulação de Mouse
-  const handleMouseMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
-    const rect = e.currentTarget.getBoundingClientRect();
-    const screenPos = { x: e.clientX - rect.left, y: e.clientY - rect.top };
-    mousePosScreenRef.current = screenPos;
-
-    // Pan no 2D (botão do meio ou direito pressionado)
-    if (isPanningRef.current) {
-      const dx = (e.clientX - lastPanMouseRef.current.x) / zoom;
-      const dy = (e.clientY - lastPanMouseRef.current.y) / zoom;
-      setPan((prev) => ({
-        x: prev.x - dx,
-        y: prev.y + dy,
-      }));
-      lastPanMouseRef.current = { x: e.clientX, y: e.clientY };
-      return;
-    }
-
-    const rawWorld = screenToWorld(e.clientX, e.clientY);
-    const snap = computeSnap(rawWorld, drawingStart, elements.walls, snapConfig, zoom);
-    setCurrentSnapped(snap);
-
-    if (onCursorMove) {
-      onCursorMove(snap.point);
-    }
-  };
-
-  const handleMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
-    // Pan: Botão do meio (1) ou Botão direito (2)
-    if (e.button === 1 || e.button === 2) {
-      isPanningRef.current = true;
-      lastPanMouseRef.current = { x: e.clientX, y: e.clientY };
+  // Manipulação de Ponteiro com setPointerCapture para Pan Confiável com Scroll e Botão Direito
+  const handlePointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    // Botão do meio (1), botão direito (2) ou Tecla Espaço para Pan
+    if (e.button === 1 || e.button === 2 || isSpacePressedRef.current) {
       e.preventDefault();
+      isPanningRef.current = true;
+      setIsPanning(true);
+      startPanMouseRef.current = { x: e.clientX, y: e.clientY };
+      try {
+        e.currentTarget.setPointerCapture(e.pointerId);
+      } catch {}
       return;
     }
 
-    // Clique Esquerdo (0)
+    // Clique Esquerdo (0) para desenhar paredes
     if (e.button === 0) {
       if (!currentSnapped) return;
       const clickPoint = currentSnapped.point;
 
-      // Desenho de Parede
       if (activeTool === 'wall') {
         if (!drawingStart) {
-          // 1º Clique: Ponto inicial da parede
+          // 1º Clique: Fixa ponto inicial
           setDrawingStart(clickPoint);
           setNumericInput('');
         } else {
-          // 2º Clique: Adiciona parede ao modelo BIM
+          // 2º Clique: Salva parede na posição exata
           const length = distance(drawingStart, clickPoint);
           if (length > 0.05) {
             const newWall: WallElement = {
@@ -297,7 +289,7 @@ export const CanvasOverlay: React.FC<CanvasOverlayProps> = ({
             bimStore.addWall(newWall);
           }
 
-          // Encadeamento contínuo (pronto para o próximo lance de parede)
+          // Encadeamento contínuo: próximo lance começa exatamente deste ponto
           setDrawingStart(clickPoint);
           setNumericInput('');
         }
@@ -305,9 +297,40 @@ export const CanvasOverlay: React.FC<CanvasOverlayProps> = ({
     }
   };
 
-  const handleMouseUp = (e: React.MouseEvent<HTMLCanvasElement>) => {
-    if (e.button === 1 || e.button === 2) {
+  const handlePointerMove = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    const screenPos = { x: e.clientX - rect.left, y: e.clientY - rect.top };
+    mousePosScreenRef.current = screenPos;
+
+    // Pan ativo: arrasto com botão do meio, direito ou espaço
+    if (isPanningRef.current) {
+      const dx = (e.clientX - startPanMouseRef.current.x) / zoomRef.current;
+      const dy = (e.clientY - startPanMouseRef.current.y) / zoomRef.current;
+
+      panRef.current.x -= dx;
+      panRef.current.y += dy; // Inversão para manter orientação cartesiada Y para cima
+      startPanMouseRef.current = { x: e.clientX, y: e.clientY };
+
+      triggerRender();
+      return;
+    }
+
+    const rawWorld = screenToWorld(e.clientX, e.clientY);
+    const snap = computeSnap(rawWorld, drawingStart, elements.walls, snapConfig, zoomRef.current);
+    setCurrentSnapped(snap);
+
+    if (onCursorMove) {
+      onCursorMove(snap.point);
+    }
+  };
+
+  const handlePointerUp = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    if (isPanningRef.current) {
       isPanningRef.current = false;
+      setIsPanning(false);
+      try {
+        e.currentTarget.releasePointerCapture(e.pointerId);
+      } catch {}
     }
   };
 
@@ -315,11 +338,17 @@ export const CanvasOverlay: React.FC<CanvasOverlayProps> = ({
     <div style={{ position: 'absolute', inset: 0, pointerEvents: 'auto' }}>
       <canvas
         ref={canvasRef}
-        style={{ width: '100%', height: '100%', display: 'block', cursor: 'crosshair' }}
-        onMouseMove={handleMouseMove}
-        onMouseDown={handleMouseDown}
-        onMouseUp={handleMouseUp}
+        style={{
+          width: '100%',
+          height: '100%',
+          display: 'block',
+          cursor: isPanning ? 'grabbing' : 'crosshair',
+        }}
+        onPointerDown={handlePointerDown}
+        onPointerMove={handlePointerMove}
+        onPointerUp={handlePointerUp}
         onContextMenu={(e) => e.preventDefault()}
+        onAuxClick={(e) => e.preventDefault()}
       />
 
       {/* Caixa de Entrada Numérica Dinâmica Flutuante */}
