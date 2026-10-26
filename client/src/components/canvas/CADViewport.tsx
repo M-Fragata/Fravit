@@ -6,6 +6,8 @@ import {
   getWallOpenings,
   getSolidWallSegments,
   analyzeWallEndpoint,
+  clipSegmentByWalls,
+  isPointInsideAnyOtherWall,
 } from '../../cad-core/geometry/wallGeometry';
 import { distance } from '../../cad-core/snaps/snapEngine';
 import { CanvasOverlay } from './CanvasOverlay';
@@ -375,7 +377,11 @@ export const CADViewport: React.FC<CADViewportProps> = ({ onCursorMove }) => {
       const openings = getWallOpenings(wall, elements.doors, elements.windows);
       const solidSegments = getSolidWallSegments(wall, openings);
 
-      // 1. Segmentos Sólidos de Alvenaria com Encontro e Preenchimento Perfeito nas Quinas
+      // 1. Segmentos Sólidos de Alvenaria com Encontros 100% Abertos (Padrão NBR 6492 / Revit)
+      const normX = -dy / wallLen;
+      const normY = dx / wallLen;
+      const halfW = wallThickness / 2;
+
       solidSegments.forEach((seg, sIdx) => {
         const isWallStart = sIdx === 0;
         const isWallEnd = sIdx === solidSegments.length - 1;
@@ -391,7 +397,7 @@ export const CADViewport: React.FC<CADViewportProps> = ({ onCursorMove }) => {
         let segStart = { ...seg.start };
         let segEnd = { ...seg.end };
 
-        // Parede dominante estende (+T/2) para cobrir 100% da quina; parede subserviente recua (-T/2) para encostar na face interna
+        // Parede dominante estende (+T/2) para cobrir 100% da quina externa nos cantos
         if (startAnalysis.connected) {
           segStart.x -= (dx / wallLen) * startAnalysis.extendAmount;
           segStart.y -= (dy / wallLen) * startAnalysis.extendAmount;
@@ -407,77 +413,71 @@ export const CADViewport: React.FC<CADViewportProps> = ({ onCursorMove }) => {
         const segMidX = (segStart.x + segEnd.x) / 2;
         const segMidY = (segStart.y + segEnd.y) / 2;
 
+        // Malha sólida da parede
         const geom = new THREE.BoxGeometry(segLen, wallThickness, is3D ? wallHeight : 0.04);
         const mesh = new THREE.Mesh(geom, is3D ? wall3DMaterial : wall2DMaterial);
         mesh.position.set(segMidX, segMidY, is3D ? wallHeight / 2 : 0.02);
         mesh.rotation.z = angle;
         mesh.castShadow = is3D;
         mesh.receiveShadow = is3D;
+        group.add(mesh);
 
-        // Arestas Técnicas Limpas
-        const halfL = segLen / 2;
-        const halfW = wallThickness / 2;
-        const topZ = is3D ? wallHeight / 2 : 0.02;
-        const botZ = is3D ? -wallHeight / 2 : -0.02;
-
+        // Arestas Técnicas Abertas (em coordenadas mundiais com recorte das paredes conectadas)
+        const topZ = is3D ? wallHeight : 0.022;
+        const botZ = is3D ? 0.001 : -0.022;
         const edgePoints: THREE.Vector3[] = [];
 
-        // Linha longitudinal: Lado +halfW (Eixo Y local positivo)
-        let startXPlus = -halfL;
-        let endXPlus = halfL;
-        if (startAnalysis.isDominant && startAnalysis.connectedSide === 1 && startAnalysis.otherWall) {
-          startXPlus = -halfL + startAnalysis.otherWall.thickness;
-        }
-        if (endAnalysis.isDominant && endAnalysis.connectedSide === 1 && endAnalysis.otherWall) {
-          endXPlus = halfL - endAnalysis.otherWall.thickness;
-        }
-        if (endXPlus - startXPlus > 0.02) {
-          edgePoints.push(new THREE.Vector3(startXPlus, halfW, topZ), new THREE.Vector3(endXPlus, halfW, topZ));
+        // Linha longitudinal 1: Lado +halfW (Mundial)
+        const p0_plus = { x: segStart.x + normX * halfW, y: segStart.y + normY * halfW };
+        const p1_plus = { x: segEnd.x + normX * halfW, y: segEnd.y + normY * halfW };
+        const visiblePlus = clipSegmentByWalls(p0_plus, p1_plus, wall.id, elements.walls);
+        visiblePlus.forEach((sub) => {
+          edgePoints.push(new THREE.Vector3(sub.start.x, sub.start.y, topZ), new THREE.Vector3(sub.end.x, sub.end.y, topZ));
           if (is3D) {
-            edgePoints.push(new THREE.Vector3(startXPlus, halfW, botZ), new THREE.Vector3(endXPlus, halfW, botZ));
+            edgePoints.push(new THREE.Vector3(sub.start.x, sub.start.y, botZ), new THREE.Vector3(sub.end.x, sub.end.y, botZ));
+          }
+        });
+
+        // Linha longitudinal 2: Lado -halfW (Mundial)
+        const p0_minus = { x: segStart.x - normX * halfW, y: segStart.y - normY * halfW };
+        const p1_minus = { x: segEnd.x - normX * halfW, y: segEnd.y - normY * halfW };
+        const visibleMinus = clipSegmentByWalls(p0_minus, p1_minus, wall.id, elements.walls);
+        visibleMinus.forEach((sub) => {
+          edgePoints.push(new THREE.Vector3(sub.start.x, sub.start.y, topZ), new THREE.Vector3(sub.end.x, sub.end.y, topZ));
+          if (is3D) {
+            edgePoints.push(new THREE.Vector3(sub.start.x, sub.start.y, botZ), new THREE.Vector3(sub.end.x, sub.end.y, botZ));
+          }
+        });
+
+        // Tampa da ponta inicial: SÓ desenha se for ponta livre no ar (sem parede conectada ou encostada)
+        if (isWallStart && !isPointInsideAnyOtherWall(wall.start, wall.id, elements.walls)) {
+          const c0 = { x: segStart.x - normX * halfW, y: segStart.y - normY * halfW };
+          const c1 = { x: segStart.x + normX * halfW, y: segStart.y + normY * halfW };
+          edgePoints.push(new THREE.Vector3(c0.x, c0.y, topZ), new THREE.Vector3(c1.x, c1.y, topZ));
+          if (is3D) {
+            edgePoints.push(new THREE.Vector3(c0.x, c0.y, botZ), new THREE.Vector3(c1.x, c1.y, botZ));
+            edgePoints.push(new THREE.Vector3(c0.x, c0.y, botZ), new THREE.Vector3(c0.x, c0.y, topZ));
+            edgePoints.push(new THREE.Vector3(c1.x, c1.y, botZ), new THREE.Vector3(c1.x, c1.y, topZ));
           }
         }
 
-        // Linha longitudinal: Lado -halfW (Eixo Y local negativo)
-        let startXMinus = -halfL;
-        let endXMinus = halfL;
-        if (startAnalysis.isDominant && startAnalysis.connectedSide === -1 && startAnalysis.otherWall) {
-          startXMinus = -halfL + startAnalysis.otherWall.thickness;
-        }
-        if (endAnalysis.isDominant && endAnalysis.connectedSide === -1 && endAnalysis.otherWall) {
-          endXMinus = halfL - endAnalysis.otherWall.thickness;
-        }
-        if (endXMinus - startXMinus > 0.02) {
-          edgePoints.push(new THREE.Vector3(startXMinus, -halfW, topZ), new THREE.Vector3(endXMinus, -halfW, topZ));
+        // Tampa da ponta final: SÓ desenha se for ponta livre no ar (sem parede conectada ou encostada)
+        if (isWallEnd && !isPointInsideAnyOtherWall(wall.end, wall.id, elements.walls)) {
+          const c0 = { x: segEnd.x - normX * halfW, y: segEnd.y - normY * halfW };
+          const c1 = { x: segEnd.x + normX * halfW, y: segEnd.y + normY * halfW };
+          edgePoints.push(new THREE.Vector3(c0.x, c0.y, topZ), new THREE.Vector3(c1.x, c1.y, topZ));
           if (is3D) {
-            edgePoints.push(new THREE.Vector3(startXMinus, -halfW, botZ), new THREE.Vector3(endXMinus, -halfW, botZ));
+            edgePoints.push(new THREE.Vector3(c0.x, c0.y, botZ), new THREE.Vector3(c1.x, c1.y, botZ));
+            edgePoints.push(new THREE.Vector3(c0.x, c0.y, botZ), new THREE.Vector3(c0.x, c0.y, topZ));
+            edgePoints.push(new THREE.Vector3(c1.x, c1.y, botZ), new THREE.Vector3(c1.x, c1.y, topZ));
           }
         }
 
-        // Tampa da ponta inicial: desenha se for livre ou dominante (fecha o contorno externo da quina)
-        if (startAnalysis.drawCap) {
-          edgePoints.push(new THREE.Vector3(-halfL, -halfW, topZ), new THREE.Vector3(-halfL, halfW, topZ));
-          if (is3D) {
-            edgePoints.push(new THREE.Vector3(-halfL, -halfW, botZ), new THREE.Vector3(-halfL, halfW, botZ));
-            edgePoints.push(new THREE.Vector3(-halfL, -halfW, botZ), new THREE.Vector3(-halfL, -halfW, topZ));
-            edgePoints.push(new THREE.Vector3(-halfL, halfW, botZ), new THREE.Vector3(-halfL, halfW, topZ));
-          }
+        if (edgePoints.length > 0) {
+          const edgeGeom = new THREE.BufferGeometry().setFromPoints(edgePoints);
+          const edgeLine = new THREE.LineSegments(edgeGeom, is3D ? edgeMaterial3D : edgeMaterial2D);
+          group.add(edgeLine);
         }
-
-        // Tampa da ponta final: desenha se for livre ou dominante (fecha o contorno externo da quina)
-        if (endAnalysis.drawCap) {
-          edgePoints.push(new THREE.Vector3(halfL, -halfW, topZ), new THREE.Vector3(halfL, halfW, topZ));
-          if (is3D) {
-            edgePoints.push(new THREE.Vector3(halfL, -halfW, botZ), new THREE.Vector3(halfL, halfW, botZ));
-            edgePoints.push(new THREE.Vector3(halfL, -halfW, botZ), new THREE.Vector3(halfL, -halfW, topZ));
-            edgePoints.push(new THREE.Vector3(halfL, halfW, botZ), new THREE.Vector3(halfL, halfW, topZ));
-          }
-        }
-
-        const edgeGeom = new THREE.BufferGeometry().setFromPoints(edgePoints);
-        const edgeLine = new THREE.LineSegments(edgeGeom, is3D ? edgeMaterial3D : edgeMaterial2D);
-        mesh.add(edgeLine);
-        group.add(mesh);
       });
 
       // 2. Vãos com Dintel, Peitoril, Janelas e Portas

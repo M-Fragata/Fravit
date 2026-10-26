@@ -216,6 +216,160 @@ export interface WallJoint {
   thickness: number;
 }
 
+export interface LineSegment2D {
+  start: Point2D;
+  end: Point2D;
+}
+
+// Checa se um ponto está dentro ou encostado na espessura de qualquer outra parede
+export function isPointInsideAnyOtherWall(
+  point: Point2D,
+  currentWallId: string,
+  walls: WallElement[],
+  margin: number = 0.03
+): boolean {
+  for (const wall of walls) {
+    if (wall.id === currentWallId) continue;
+    const dx = wall.end.x - wall.start.x;
+    const dy = wall.end.y - wall.start.y;
+    const len = Math.sqrt(dx * dx + dy * dy);
+    if (len < 0.01) continue;
+
+    const ux = dx / len;
+    const uy = dy / len;
+    const nx = -uy;
+    const ny = ux;
+
+    const midX = (wall.start.x + wall.end.x) / 2;
+    const midY = (wall.start.y + wall.end.y) / 2;
+
+    const rx = point.x - midX;
+    const ry = point.y - midY;
+
+    const distLong = Math.abs(rx * ux + ry * uy);
+    const distTrans = Math.abs(rx * nx + ry * ny);
+
+    if (distLong <= len / 2 + 0.05 && distTrans <= wall.thickness / 2 + margin) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// Recorta um segmento de linha [p0, p1], removendo qualquer parte que passe por dentro de outras paredes
+export function clipSegmentByWalls(
+  p0: Point2D,
+  p1: Point2D,
+  currentWallId: string,
+  walls: WallElement[]
+): LineSegment2D[] {
+  const lineDx = p1.x - p0.x;
+  const lineDy = p1.y - p0.y;
+  const lineLen = Math.sqrt(lineDx * lineDx + lineDy * lineDy);
+  if (lineLen < 0.01) return [];
+
+  // Intervalos visíveis parametrizados em s in [0, 1]
+  let visibleIntervals: { s0: number; s1: number }[] = [{ s0: 0, s1: 1 }];
+
+  for (const other of walls) {
+    if (other.id === currentWallId) continue;
+
+    const oDx = other.end.x - other.start.x;
+    const oDy = other.end.y - other.start.y;
+    const oLen = Math.sqrt(oDx * oDx + oDy * oDy);
+    if (oLen < 0.01) continue;
+
+    const ux = oDx / oLen;
+    const uy = oDy / oLen;
+    const nx = -uy;
+    const ny = ux;
+
+    const midX = (other.start.x + other.end.x) / 2;
+    const midY = (other.start.y + other.end.y) / 2;
+
+    // Meia espessura da outra parede (subtrai 2mm para que linhas coincidentes nas faces externas não sejam clipadas)
+    const halfL = oLen / 2 + 0.01;
+    const halfW = other.thickness / 2 - 0.002;
+    if (halfW <= 0) continue;
+
+    const r0x = p0.x - midX;
+    const r0y = p0.y - midY;
+
+    const A_long = r0x * ux + r0y * uy;
+    const B_long = lineDx * ux + lineDy * uy;
+
+    const A_trans = r0x * nx + r0y * ny;
+    const B_trans = lineDx * nx + lineDy * ny;
+
+    let sMinLong = 0;
+    let sMaxLong = 1;
+    if (Math.abs(B_long) < 1e-6) {
+      if (Math.abs(A_long) > halfL) continue;
+      sMinLong = -Infinity;
+      sMaxLong = Infinity;
+    } else if (B_long > 0) {
+      sMinLong = (-halfL - A_long) / B_long;
+      sMaxLong = (halfL - A_long) / B_long;
+    } else {
+      sMinLong = (halfL - A_long) / B_long;
+      sMaxLong = (-halfL - A_long) / B_long;
+    }
+
+    let sMinTrans = 0;
+    let sMaxTrans = 1;
+    if (Math.abs(B_trans) < 1e-6) {
+      if (Math.abs(A_trans) >= halfW) continue;
+      sMinTrans = -Infinity;
+      sMaxTrans = Infinity;
+    } else if (B_trans > 0) {
+      sMinTrans = (-halfW - A_trans) / B_trans;
+      sMaxTrans = (halfW - A_trans) / B_trans;
+    } else {
+      sMinTrans = (halfW - A_trans) / B_trans;
+      sMaxTrans = (-halfW - A_trans) / B_trans;
+    }
+
+    const enterS = Math.max(sMinLong, sMinTrans, 0);
+    const exitS = Math.min(sMaxLong, sMaxTrans, 1);
+
+    if (exitS - enterS > 0.005) {
+      const nextIntervals: { s0: number; s1: number }[] = [];
+      for (const inv of visibleIntervals) {
+        if (exitS <= inv.s0 || enterS >= inv.s1) {
+          nextIntervals.push(inv);
+        } else {
+          if (inv.s0 < enterS - 0.001) {
+            nextIntervals.push({ s0: inv.s0, s1: enterS });
+          }
+          if (exitS + 0.001 < inv.s1) {
+            nextIntervals.push({ s0: exitS, s1: inv.s1 });
+          }
+        }
+      }
+      visibleIntervals = nextIntervals;
+    }
+  }
+
+  const result: LineSegment2D[] = [];
+  for (const inv of visibleIntervals) {
+    const segLen = (inv.s1 - inv.s0) * lineLen;
+    if (segLen > 0.015) {
+      result.push({
+        start: {
+          x: p0.x + inv.s0 * lineDx,
+          y: p0.y + inv.s0 * lineDy,
+        },
+        end: {
+          x: p0.x + inv.s1 * lineDx,
+          y: p0.y + inv.s1 * lineDy,
+        },
+      });
+    }
+  }
+
+  return result;
+}
+
 // Checa se uma extremidade de parede está conectada a outra parede
 export function isWallEndpointConnected(
   point: Point2D,
