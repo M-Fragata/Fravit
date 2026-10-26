@@ -9,7 +9,15 @@ export interface Point3D {
   z: number;
 }
 
-export type SnapType = 'endpoint' | 'midpoint' | 'intersection' | 'grid' | 'perpendicular';
+export type SnapType =
+  | 'endpoint'
+  | 'midpoint'
+  | 'intersection'
+  | 'grid'
+  | 'perpendicular'
+  | 'wall_center'
+  | 'wall_ext'
+  | 'wall_int';
 
 export interface SnapResult {
   point: Point2D;
@@ -17,6 +25,7 @@ export interface SnapResult {
   sourceElementId?: string;
   polarAngle?: number;
   guideLines?: { start: Point2D; end: Point2D; isPolar?: boolean }[];
+  label?: string;
 }
 
 export interface SnapConfig {

@@ -439,23 +439,53 @@ export const bimStore = {
     const nextLevels = currentState.levels
       .map((lvl) => (lvl.id === levelId ? { ...lvl, ...updates } : lvl))
       .sort((a, b) => a.elevation - b.elevation);
+
+    // Se o pé-direito (height) foi alterado, atualiza também as paredes desse nível
+    let updatedWalls = currentState.elements.walls;
+    if (updates.height !== undefined) {
+      const h = updates.height;
+      updatedWalls = updatedWalls.map((w) =>
+        w.levelId === levelId ? { ...w, height: h } : w
+      );
+    }
+
     currentState = {
       ...currentState,
       levels: nextLevels,
+      elements: {
+        ...currentState.elements,
+        walls: updatedWalls,
+      },
     };
     emitChange();
   },
 
   removeLevel: (levelId: string) => {
     if (currentState.levels.length <= 1) {
-      alert('O projeto precisa ter pelo menos um nível!');
       return;
     }
     const nextLevels = currentState.levels.filter((lvl) => lvl.id !== levelId);
+    const fallbackLevelId = nextLevels[0].id;
+    const reassign = <T extends { levelId: string }>(items: T[]): T[] =>
+      items.map((item) => (item.levelId === levelId ? { ...item, levelId: fallbackLevelId } : item));
+
     currentState = {
       ...currentState,
       levels: nextLevels,
-      activeLevelId: currentState.activeLevelId === levelId ? nextLevels[0].id : currentState.activeLevelId,
+      activeLevelId: currentState.activeLevelId === levelId ? fallbackLevelId : currentState.activeLevelId,
+      elements: {
+        ...currentState.elements,
+        walls: reassign(currentState.elements.walls),
+        doors: reassign(currentState.elements.doors),
+        windows: reassign(currentState.elements.windows),
+        floors: reassign(currentState.elements.floors),
+        roofs: reassign(currentState.elements.roofs),
+        stairs: reassign(currentState.elements.stairs),
+        rooms: reassign(currentState.elements.rooms),
+        roomSeparators: reassign(currentState.elements.roomSeparators),
+        dimensions: reassign(currentState.elements.dimensions),
+        sections: reassign(currentState.elements.sections),
+      },
     };
     emitChange();
   },

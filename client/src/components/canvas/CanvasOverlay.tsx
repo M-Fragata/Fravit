@@ -1043,10 +1043,46 @@ export const CanvasOverlay: React.FC<CanvasOverlayProps> = ({
         ctx.restore();
       }
 
-      // H. Marcadores de Snap Magnético
+      // H. Marcadores de Snap Magnético e Identificação de Faces/Extremidades
       if (currentSnapped) {
         const screenSnap = worldToScreen(currentSnapped.point.x, currentSnapped.point.y);
-        if (currentSnapped.type === 'endpoint') {
+
+        if (currentSnapped.type === 'wall_ext') {
+          // Face ou Extremidade Externa: Losango / Indicador Ciano
+          ctx.strokeStyle = '#38bdf8';
+          ctx.lineWidth = 2.2;
+          ctx.beginPath();
+          ctx.moveTo(screenSnap.x, screenSnap.y - 7);
+          ctx.lineTo(screenSnap.x + 7, screenSnap.y);
+          ctx.lineTo(screenSnap.x, screenSnap.y + 7);
+          ctx.lineTo(screenSnap.x - 7, screenSnap.y);
+          ctx.closePath();
+          ctx.stroke();
+        } else if (currentSnapped.type === 'wall_int') {
+          // Face ou Extremidade Interna: Losango / Indicador Esmeralda
+          ctx.strokeStyle = '#34d399';
+          ctx.lineWidth = 2.2;
+          ctx.beginPath();
+          ctx.moveTo(screenSnap.x, screenSnap.y - 7);
+          ctx.lineTo(screenSnap.x + 7, screenSnap.y);
+          ctx.lineTo(screenSnap.x, screenSnap.y + 7);
+          ctx.lineTo(screenSnap.x - 7, screenSnap.y);
+          ctx.closePath();
+          ctx.stroke();
+        } else if (currentSnapped.type === 'wall_center') {
+          // Eixo Central: Círculo com Mira Central Roxa/Azul
+          ctx.strokeStyle = '#a855f7';
+          ctx.lineWidth = 2;
+          ctx.beginPath();
+          ctx.arc(screenSnap.x, screenSnap.y, 6, 0, Math.PI * 2);
+          ctx.stroke();
+          ctx.beginPath();
+          ctx.moveTo(screenSnap.x - 9, screenSnap.y);
+          ctx.lineTo(screenSnap.x + 9, screenSnap.y);
+          ctx.moveTo(screenSnap.x, screenSnap.y - 9);
+          ctx.lineTo(screenSnap.x, screenSnap.y + 9);
+          ctx.stroke();
+        } else if (currentSnapped.type === 'endpoint') {
           ctx.strokeStyle = '#10b981';
           ctx.lineWidth = 2.5;
           ctx.strokeRect(screenSnap.x - 7, screenSnap.y - 7, 14, 14);
@@ -1064,6 +1100,34 @@ export const CanvasOverlay: React.FC<CanvasOverlayProps> = ({
           ctx.beginPath();
           ctx.arc(screenSnap.x, screenSnap.y, 3.5, 0, Math.PI * 2);
           ctx.fill();
+        }
+
+        // Etiqueta Tooltip Normativa do Snap (ex: "Face Externa", "Extremidade Interna", "Eixo Central")
+        if (currentSnapped.label) {
+          ctx.save();
+          ctx.font = '600 10px "JetBrains Mono", monospace';
+          const labelText = currentSnapped.label;
+          const textWidth = ctx.measureText(labelText).width;
+          const badgeX = screenSnap.x + 12;
+          const badgeY = screenSnap.y - 20;
+
+          ctx.fillStyle = 'rgba(15, 23, 42, 0.92)';
+          ctx.strokeStyle =
+            currentSnapped.type === 'wall_ext'
+              ? '#38bdf8'
+              : currentSnapped.type === 'wall_int'
+              ? '#34d399'
+              : '#a855f7';
+          ctx.lineWidth = 1;
+          ctx.beginPath();
+          ctx.roundRect(badgeX, badgeY, textWidth + 12, 18, 4);
+          ctx.fill();
+          ctx.stroke();
+
+          ctx.fillStyle = ctx.strokeStyle;
+          ctx.textAlign = 'left';
+          ctx.fillText(labelText, badgeX + 6, badgeY + 12);
+          ctx.restore();
         }
       }
 

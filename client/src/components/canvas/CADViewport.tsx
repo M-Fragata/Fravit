@@ -1,6 +1,6 @@
 import React, { useRef, useEffect, useCallback, useState } from 'react';
 import * as THREE from 'three';
-import { useBIM } from '../../cad-core/engine/bimStore';
+import { useBIM, bimStore } from '../../cad-core/engine/bimStore';
 import type { Point2D } from '../../cad-core/types';
 import {
   getWallOpenings,
@@ -46,6 +46,11 @@ export const CADViewport: React.FC<CADViewportProps> = ({ onCursorMove }) => {
     isDragging: false,
     lastMouse: { x: 0, y: 0 },
   });
+
+  // Estados de navegação no Corte (Section Pan & Drag)
+  const sectionPanRef = useRef({ u: 0, z: 1.4 });
+  const isDraggingSectionRef = useRef(false);
+  const lastSectionMouseRef = useRef({ x: 0, y: 0 });
 
   const getLevelElevation = (levelId?: string): number => {
     const lvl = levels.find((l) => l.id === levelId);
@@ -156,22 +161,29 @@ export const CADViewport: React.FC<CADViewportProps> = ({ onCursorMove }) => {
           const sDx = currentSec.end.x - currentSec.start.x;
           const sDy = currentSec.end.y - currentSec.start.y;
           const sLen = Math.sqrt(sDx * sDx + sDy * sDy) || 1;
-          const sNx = -sDy / sLen;
-          const sNy = sDx / sLen;
+          const uX = sDx / sLen;
+          const uY = sDy / sLen;
+          const sNx = -uY;
+          const sNy = uX;
           const sMidX = (currentSec.start.x + currentSec.end.x) / 2;
           const sMidY = (currentSec.start.y + currentSec.end.y) / 2;
 
           const curHeight = containerRef.current?.clientHeight || 600;
           const curWidth = containerRef.current?.clientWidth || 800;
           const curAspect = curWidth / curHeight;
-          const fSize = Math.max(sLen * 1.5, 6);
+          const fSize = curHeight / zoomRef.current;
 
           orthoCam.left = (-fSize * curAspect) / 2;
           orthoCam.right = (fSize * curAspect) / 2;
           orthoCam.top = fSize / 2;
           orthoCam.bottom = -fSize / 2;
-          orthoCam.position.set(sMidX + sNx * 50, sMidY + sNy * 50, 1.8);
-          orthoCam.lookAt(sMidX, sMidY, 1.8);
+
+          const camTargetX = sMidX + uX * sectionPanRef.current.u;
+          const camTargetY = sMidY + uY * sectionPanRef.current.u;
+          const camTargetZ = sectionPanRef.current.z;
+
+          orthoCam.position.set(camTargetX + sNx * 50, camTargetY + sNy * 50, camTargetZ);
+          orthoCam.lookAt(camTargetX, camTargetY, camTargetZ);
           orthoCam.up.set(0, 0, 1);
           orthoCam.updateProjectionMatrix();
 
@@ -685,6 +697,11 @@ export const CADViewport: React.FC<CADViewportProps> = ({ onCursorMove }) => {
       if (activeView === '3d') {
         const factor = e.deltaY > 0 ? 1.1 : 0.9;
         orbitRef.current.radius = Math.max(2, Math.min(80, orbitRef.current.radius * factor));
+      } else if (activeView === 'section') {
+        // Zoom suave centrado na vista de corte fatiada
+        const zoomFactor = e.deltaY < 0 ? 1.15 : 0.85;
+        zoomRef.current = Math.max(10, Math.min(300, zoomRef.current * zoomFactor));
+        triggerRender();
       } else {
         const zoomFactor = e.deltaY < 0 ? 1.15 : 0.85;
         const oldZoom = zoomRef.current;
@@ -740,18 +757,23 @@ export const CADViewport: React.FC<CADViewportProps> = ({ onCursorMove }) => {
   // Manipulação de Mouse no modo 3D (Shift+Scroll para Órbita 3D, Scroll puro para Pan 2D)
   const orbitModeRef = useRef<'orbit' | 'pan'>('orbit');
 
-  const handlePointerDown3D = (e: React.PointerEvent) => {
-    if (activeView !== '3d') return;
+  const handlePointerDownContainer = (e: React.PointerEvent) => {
+    if (activeView === '3d') {
+      if (e.button === 1 || e.button === 2 || e.button === 0) {
+        const shouldOrbit = e.shiftKey || (e.button === 0 && !e.altKey);
+        orbitModeRef.current = shouldOrbit ? 'orbit' : 'pan';
 
-    // Scroll (botão 1), botão direito (2) ou botão esquerdo (0)
-    if (e.button === 1 || e.button === 2 || e.button === 0) {
-      // Se Shift estiver pressionado (ou botão esquerdo): Órbita 3D
-      // Se apenas o Scroll (botão 1) ou botão direito: Pan 2D
-      const shouldOrbit = e.shiftKey || (e.button === 0 && !e.altKey);
-      orbitModeRef.current = shouldOrbit ? 'orbit' : 'pan';
-
-      orbitRef.current.isDragging = true;
-      orbitRef.current.lastMouse = { x: e.clientX, y: e.clientY };
+        orbitRef.current.isDragging = true;
+        orbitRef.current.lastMouse = { x: e.clientX, y: e.clientY };
+        try {
+          e.currentTarget.setPointerCapture(e.pointerId);
+        } catch {}
+        e.preventDefault();
+      }
+    } else if (activeView === 'section') {
+      // Arraste com Scroll (botão 1), Botão Direito (2) ou Botão Esquerdo (0) para Pan da Vista de Corte
+      isDraggingSectionRef.current = true;
+      lastSectionMouseRef.current = { x: e.clientX, y: e.clientY };
       try {
         e.currentTarget.setPointerCapture(e.pointerId);
       } catch {}
@@ -759,36 +781,50 @@ export const CADViewport: React.FC<CADViewportProps> = ({ onCursorMove }) => {
     }
   };
 
-  const handlePointerMove3D = (e: React.PointerEvent) => {
-    if (activeView !== '3d' || !orbitRef.current.isDragging) return;
+  const handlePointerMoveContainer = (e: React.PointerEvent) => {
+    if (activeView === '3d') {
+      if (!orbitRef.current.isDragging) return;
 
-    const dx = e.clientX - orbitRef.current.lastMouse.x;
-    const dy = e.clientY - orbitRef.current.lastMouse.y;
-    orbitRef.current.lastMouse = { x: e.clientX, y: e.clientY };
+      const dx = e.clientX - orbitRef.current.lastMouse.x;
+      const dy = e.clientY - orbitRef.current.lastMouse.y;
+      orbitRef.current.lastMouse = { x: e.clientX, y: e.clientY };
 
-    if (orbitModeRef.current === 'orbit') {
-      // Rotação orbital 3D
-      orbitRef.current.theta -= dx * 0.008;
-      orbitRef.current.phi = Math.max(0.05, Math.min(Math.PI / 2 - 0.02, orbitRef.current.phi - dy * 0.008));
-    } else {
-      // Pan 2D no espaço 3D (deslocamento pelo plano de visão da câmera)
-      if (perspCameraRef.current) {
-        const cam = perspCameraRef.current;
-        const dir = new THREE.Vector3();
-        cam.getWorldDirection(dir);
-        const right = new THREE.Vector3().crossVectors(dir, cam.up).normalize();
-        const up = new THREE.Vector3().crossVectors(right, dir).normalize();
+      if (orbitModeRef.current === 'orbit') {
+        orbitRef.current.theta -= dx * 0.008;
+        orbitRef.current.phi = Math.max(0.05, Math.min(Math.PI / 2 - 0.02, orbitRef.current.phi - dy * 0.008));
+      } else {
+        if (perspCameraRef.current) {
+          const cam = perspCameraRef.current;
+          const dir = new THREE.Vector3();
+          cam.getWorldDirection(dir);
+          const right = new THREE.Vector3().crossVectors(dir, cam.up).normalize();
+          const up = new THREE.Vector3().crossVectors(right, dir).normalize();
 
-        const panSpeed = orbitRef.current.radius * 0.0016;
-        orbitRef.current.target.addScaledVector(right, -dx * panSpeed);
-        orbitRef.current.target.addScaledVector(up, dy * panSpeed);
+          const panSpeed = orbitRef.current.radius * 0.0016;
+          orbitRef.current.target.addScaledVector(right, -dx * panSpeed);
+          orbitRef.current.target.addScaledVector(up, dy * panSpeed);
+        }
       }
+    } else if (activeView === 'section' && isDraggingSectionRef.current) {
+      const dx = e.clientX - lastSectionMouseRef.current.x;
+      const dy = e.clientY - lastSectionMouseRef.current.y;
+      lastSectionMouseRef.current = { x: e.clientX, y: e.clientY };
+
+      // Desloca horizontalmente ao longo do plano de corte e verticalmente na altura Z
+      sectionPanRef.current.u -= dx / zoomRef.current;
+      sectionPanRef.current.z += dy / zoomRef.current;
+      triggerRender();
     }
   };
 
-  const handlePointerUp3D = (e: React.PointerEvent) => {
+  const handlePointerUpContainer = (e: React.PointerEvent) => {
     if (activeView === '3d') {
       orbitRef.current.isDragging = false;
+      try {
+        e.currentTarget.releasePointerCapture(e.pointerId);
+      } catch {}
+    } else if (activeView === 'section') {
+      isDraggingSectionRef.current = false;
       try {
         e.currentTarget.releasePointerCapture(e.pointerId);
       } catch {}
@@ -807,9 +843,9 @@ export const CADViewport: React.FC<CADViewportProps> = ({ onCursorMove }) => {
       }}
       onContextMenu={(e) => e.preventDefault()}
       onAuxClick={(e) => e.preventDefault()}
-      onPointerDown={handlePointerDown3D}
-      onPointerMove={handlePointerMove3D}
-      onPointerUp={handlePointerUp3D}
+      onPointerDown={handlePointerDownContainer}
+      onPointerMove={handlePointerMoveContainer}
+      onPointerUp={handlePointerUpContainer}
     >
       {/* Subcontainer isolado para o WebGL do Three.js */}
       <div
@@ -821,8 +857,8 @@ export const CADViewport: React.FC<CADViewportProps> = ({ onCursorMove }) => {
         }}
       />
 
-      {/* Overlay 2D Interativo (Snaps, Pan/Zoom e Desenho de Paredes) */}
-      {activeView !== '3d' && (
+      {/* Overlay 2D Interativo (Snaps, Pan/Zoom e Desenho de Paredes - EXCLUSIVO PARA PLANTA BAIXA) */}
+      {activeView === 'plan' && (
         <CanvasOverlay
           panRef={panRef}
           zoomRef={zoomRef}
@@ -831,6 +867,55 @@ export const CADViewport: React.FC<CADViewportProps> = ({ onCursorMove }) => {
           worldToScreen={worldToScreen}
           onCursorMove={onCursorMove}
         />
+      )}
+
+      {/* Banner / HUD Informativo Normativo na Vista de Corte */}
+      {activeView === 'section' && (
+        <div
+          style={{
+            position: 'absolute',
+            top: 14,
+            left: '50%',
+            transform: 'translateX(-50%)',
+            background: 'rgba(15, 23, 42, 0.92)',
+            border: '1px solid rgba(56, 189, 248, 0.4)',
+            backdropFilter: 'blur(8px)',
+            borderRadius: '9999px',
+            padding: '6px 16px',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 12,
+            boxShadow: '0 8px 24px rgba(0, 0, 0, 0.45)',
+            zIndex: 20,
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <span style={{ width: 8, height: 8, borderRadius: '50%', background: 'var(--cad-cyan)', display: 'inline-block' }} />
+            <span style={{ fontSize: '12px', fontWeight: 600, color: '#f8fafc' }}>
+              Vista de Corte: {elements.sections.find((s) => s.id === activeSectionId)?.name || 'Corte A-A'}
+            </span>
+          </div>
+          <span style={{ fontSize: '11px', color: 'var(--text-dim)' }}>
+            Arraste com o mouse para mover • Roda do mouse para zoom
+          </span>
+          <button
+            onClick={() => bimStore.setActiveView('plan')}
+            style={{
+              background: 'rgba(56, 189, 248, 0.15)',
+              border: '1px solid rgba(56, 189, 248, 0.35)',
+              borderRadius: '9999px',
+              color: 'var(--cad-cyan)',
+              fontSize: '11px',
+              fontWeight: 600,
+              padding: '2px 10px',
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+            }}
+          >
+            ✕ Voltar à Planta
+          </button>
+        </div>
       )}
     </div>
   );

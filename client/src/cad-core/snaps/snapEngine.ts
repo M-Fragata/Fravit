@@ -1,4 +1,4 @@
-import type { Point2D, SnapResult, SnapConfig, WallElement } from '../types';
+import type { Point2D, SnapResult, SnapConfig, WallElement, SnapType } from '../types';
 
 export function distance(p1: Point2D, p2: Point2D): number {
   const dx = p2.x - p1.x;
@@ -85,52 +85,135 @@ export function computeSnap(
     };
   }
 
-  // 2. Object Snaps (Extremidades e Pontos Médios de Paredes)
+  // 2. Object Snaps (Extremidades e Faces de Paredes: Externa, Interna e Central)
   if (config.objectSnap) {
     let closestSnap: SnapResult | null = null;
     let minDistance = worldThreshold;
 
+    // 2.1. Prioridade A: Vértices discretos (Quinas externas, internas, eixos e pontos médios)
     for (const wall of walls) {
-      // Endpoint: Start
-      const dStart = distance(rawWorldPoint, wall.start);
-      if (dStart < minDistance) {
-        minDistance = dStart;
-        closestSnap = {
-          point: { ...wall.start },
-          type: 'endpoint',
-          sourceElementId: wall.id,
-        };
-      }
+      const dx = wall.end.x - wall.start.x;
+      const dy = wall.end.y - wall.start.y;
+      const wallLen = Math.sqrt(dx * dx + dy * dy);
+      if (wallLen < 0.01) continue;
 
-      // Endpoint: End
-      const dEnd = distance(rawWorldPoint, wall.end);
-      if (dEnd < minDistance) {
-        minDistance = dEnd;
-        closestSnap = {
-          point: { ...wall.end },
-          type: 'endpoint',
-          sourceElementId: wall.id,
-        };
-      }
+      const halfW = (wall.thickness || 0.15) / 2;
+      const normX = -dy / wallLen;
+      const normY = dx / wallLen;
 
-      // Midpoint
-      const midpoint: Point2D = {
-        x: (wall.start.x + wall.end.x) / 2,
-        y: (wall.start.y + wall.end.y) / 2,
-      };
-      const dMid = distance(rawWorldPoint, midpoint);
-      if (dMid < minDistance) {
-        minDistance = dMid;
-        closestSnap = {
-          point: midpoint,
+      // Lista de pontos-chave discretos
+      const keyPoints: { pt: Point2D; type: SnapType; label: string }[] = [
+        // Extremidade Inicial
+        { pt: { x: wall.start.x, y: wall.start.y }, type: 'wall_center', label: 'Eixo / Centro' },
+        { pt: { x: wall.start.x + normX * halfW, y: wall.start.y + normY * halfW }, type: 'wall_ext', label: 'Extremidade Externa' },
+        { pt: { x: wall.start.x - normX * halfW, y: wall.start.y - normY * halfW }, type: 'wall_int', label: 'Extremidade Interna' },
+
+        // Extremidade Final
+        { pt: { x: wall.end.x, y: wall.end.y }, type: 'wall_center', label: 'Eixo / Centro' },
+        { pt: { x: wall.end.x + normX * halfW, y: wall.end.y + normY * halfW }, type: 'wall_ext', label: 'Extremidade Externa' },
+        { pt: { x: wall.end.x - normX * halfW, y: wall.end.y - normY * halfW }, type: 'wall_int', label: 'Extremidade Interna' },
+
+        // Pontos Médios
+        {
+          pt: { x: (wall.start.x + wall.end.x) / 2, y: (wall.start.y + wall.end.y) / 2 },
           type: 'midpoint',
-          sourceElementId: wall.id,
-        };
+          label: 'Ponto Médio (Eixo)',
+        },
+        {
+          pt: { x: (wall.start.x + wall.end.x) / 2 + normX * halfW, y: (wall.start.y + wall.end.y) / 2 + normY * halfW },
+          type: 'wall_ext',
+          label: 'Ponto Médio (Face Ext)',
+        },
+        {
+          pt: { x: (wall.start.x + wall.end.x) / 2 - normX * halfW, y: (wall.start.y + wall.end.y) / 2 - normY * halfW },
+          type: 'wall_int',
+          label: 'Ponto Médio (Face Int)',
+        },
+      ];
+
+      for (const kp of keyPoints) {
+        const d = distance(rawWorldPoint, kp.pt);
+        if (d < minDistance) {
+          minDistance = d;
+          closestSnap = {
+            point: kp.pt,
+            type: kp.type,
+            label: kp.label,
+            sourceElementId: wall.id,
+          };
+        }
       }
     }
 
     if (closestSnap) {
       return closestSnap;
+    }
+
+    // 2.2. Prioridade B: Projeção contínua ao longo das faces (Face Externa, Face Interna, Eixo)
+    let closestFaceSnap: SnapResult | null = null;
+    let minFaceDist = worldThreshold;
+
+    for (const wall of walls) {
+      const dx = wall.end.x - wall.start.x;
+      const dy = wall.end.y - wall.start.y;
+      const wallLen = Math.sqrt(dx * dx + dy * dy);
+      if (wallLen < 0.01) continue;
+
+      const halfW = (wall.thickness || 0.15) / 2;
+      const ux = dx / wallLen;
+      const uy = dy / wallLen;
+      const normX = -uy;
+      const normY = ux;
+
+      // Projeção paramétrica 't' ao longo da parede
+      const vx = rawWorldPoint.x - wall.start.x;
+      const vy = rawWorldPoint.y - wall.start.y;
+      const t = vx * ux + vy * uy;
+
+      // Somente se o ponto estiver contido na extensão longitudinal da parede
+      if (t >= 0 && t <= wallLen) {
+        const centerPt = { x: wall.start.x + ux * t, y: wall.start.y + uy * t };
+        const extPt = { x: centerPt.x + normX * halfW, y: centerPt.y + normY * halfW };
+        const intPt = { x: centerPt.x - normX * halfW, y: centerPt.y - normY * halfW };
+
+        const dExt = distance(rawWorldPoint, extPt);
+        const dInt = distance(rawWorldPoint, intPt);
+        const dCenter = distance(rawWorldPoint, centerPt);
+
+        if (dExt < minFaceDist) {
+          minFaceDist = dExt;
+          closestFaceSnap = {
+            point: extPt,
+            type: 'wall_ext',
+            label: 'Face Externa',
+            sourceElementId: wall.id,
+          };
+        }
+
+        if (dInt < minFaceDist) {
+          minFaceDist = dInt;
+          closestFaceSnap = {
+            point: intPt,
+            type: 'wall_int',
+            label: 'Face Interna',
+            sourceElementId: wall.id,
+          };
+        }
+
+        if (dCenter < minFaceDist) {
+          minFaceDist = dCenter;
+          closestFaceSnap = {
+            point: centerPt,
+            type: 'wall_center',
+            label: 'Eixo Central',
+            sourceElementId: wall.id,
+          };
+        }
+      }
+    }
+
+    if (closestFaceSnap) {
+      return closestFaceSnap;
     }
   }
 

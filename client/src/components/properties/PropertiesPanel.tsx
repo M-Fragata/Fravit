@@ -446,10 +446,75 @@ export const PropertiesPanel: React.FC = () => {
           </div>
         )}
 
-        {/* Outras ferramentas */}
+        {/* Modo Seleção / Painel de Nível Ativo e Parâmetros Globais */}
         {activeTool === 'select' && (
-          <div style={{ textAlign: 'center', padding: '40px 10px', color: 'var(--text-dim)', fontSize: '13px' }}>
-            Selecione uma ferramenta na barra esquerda ou clique em um elemento na tela para inspecionar e editar suas propriedades paramétricas.
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--cad-cyan)', textTransform: 'uppercase' }}>
+                Nível Ativo e Pé-Direito
+              </div>
+
+              <div>
+                <label style={{ fontSize: '12px', color: 'var(--text-muted)', display: 'block', marginBottom: 4 }}>
+                  Nível de Trabalho Atual
+                </label>
+                <select
+                  value={activeLevelId}
+                  onChange={(e) => bimStore.setActiveLevelId(e.target.value)}
+                  style={{ width: '100%' }}
+                >
+                  {levels.map((lvl) => (
+                    <option key={lvl.id} value={lvl.id}>
+                      {lvl.name} (+{lvl.elevation.toFixed(2)}m)
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {(() => {
+                const currentLvl = levels.find((l) => l.id === activeLevelId) || levels[0];
+                if (!currentLvl) return null;
+                return (
+                  <>
+                    <div>
+                      <label style={{ fontSize: '12px', color: 'var(--text-muted)', display: 'block', marginBottom: 4 }}>
+                        Cota de Elevação (m)
+                      </label>
+                      <input
+                        type="number"
+                        step="0.10"
+                        value={currentLvl.elevation}
+                        onChange={(e) => {
+                          const val = parseFloat(e.target.value) || 0;
+                          bimStore.updateLevel(currentLvl.id, { elevation: val });
+                        }}
+                        style={{ width: '100%', fontFamily: 'var(--font-mono)' }}
+                      />
+                    </div>
+
+                    <div>
+                      <label style={{ fontSize: '12px', color: 'var(--text-muted)', display: 'block', marginBottom: 4 }}>
+                        Pé-Direito do Pavimento (m)
+                      </label>
+                      <input
+                        type="number"
+                        step="0.05"
+                        value={currentLvl.height ?? 2.8}
+                        onChange={(e) => {
+                          const val = parseFloat(e.target.value) || 2.8;
+                          bimStore.updateLevel(currentLvl.id, { height: val });
+                        }}
+                        style={{ width: '100%', fontFamily: 'var(--font-mono)' }}
+                      />
+                    </div>
+                  </>
+                );
+              })()}
+            </div>
+
+            <div style={{ textAlign: 'center', padding: '16px 10px', color: 'var(--text-dim)', fontSize: '12px', borderTop: '1px solid var(--border-color)', lineHeight: 1.5 }}>
+              Selecione uma ferramenta na barra esquerda ou clique em um elemento na tela para inspecionar parâmetros específicos.
+            </div>
           </div>
         )}
       </div>

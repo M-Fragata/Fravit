@@ -28,6 +28,10 @@ export const EditorPreview: React.FC<EditorPreviewProps> = ({ projectId, onBack 
   const [project, setProject] = useState<ProjectDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [cursorPos, setCursorPos] = useState<Point2D>({ x: 0, y: 0 });
+  const [showAddLevel, setShowAddLevel] = useState(false);
+  const [newLevelName, setNewLevelName] = useState('');
+  const [newLevelElevation, setNewLevelElevation] = useState('2.80');
+  const [newLevelHeight, setNewLevelHeight] = useState('2.80');
 
   const { activeView, levels, activeLevelId, elements, activeSectionId } = useBIM();
 
@@ -343,14 +347,12 @@ export const EditorPreview: React.FC<EditorPreviewProps> = ({ projectId, onBack 
                 </span>
                 <button
                   onClick={() => {
-                    const nextNum = levels.length + 1;
-                    const name = window.prompt('Nome do novo nível:', `Pavimento ${nextNum}`);
-                    if (!name) return;
-                    const defaultElev = levels.length > 0 ? (levels[levels.length - 1].elevation + 2.80).toFixed(2) : '2.80';
-                    const elevStr = window.prompt('Elevação em metros (ex: 2.80):', defaultElev);
-                    if (elevStr === null) return;
-                    const elev = parseFloat(elevStr.replace(',', '.')) || 0;
-                    bimStore.addLevel(name, elev);
+                    setNewLevelName(`Pavimento ${levels.length + 1}`);
+                    const lastLvl = levels[levels.length - 1];
+                    const nextElev = lastLvl ? (lastLvl.elevation + (lastLvl.height || 2.8)).toFixed(2) : '2.80';
+                    setNewLevelElevation(nextElev);
+                    setNewLevelHeight('2.80');
+                    setShowAddLevel(!showAddLevel);
                   }}
                   title="Criar novo nível / andar"
                   style={{
@@ -358,7 +360,7 @@ export const EditorPreview: React.FC<EditorPreviewProps> = ({ projectId, onBack 
                     border: '1px solid rgba(37, 99, 235, 0.3)',
                     color: 'var(--cad-blue)',
                     cursor: 'pointer',
-                    padding: '2px 5px',
+                    padding: '2px 6px',
                     borderRadius: '4px',
                     display: 'flex',
                     alignItems: 'center',
@@ -371,57 +373,245 @@ export const EditorPreview: React.FC<EditorPreviewProps> = ({ projectId, onBack 
                 </button>
               </div>
 
-              {levels.map((lvl) => (
+              {/* Formulário Inline para Adicionar Novo Nível */}
+              {showAddLevel && (
                 <div
-                  key={lvl.id}
-                  onClick={() => {
-                    bimStore.setActiveLevelId(lvl.id);
-                    if (activeView === 'section') {
-                      bimStore.setActiveView('plan');
-                    }
-                  }}
                   style={{
-                    padding: '8px 10px',
+                    padding: '10px',
                     borderRadius: 'var(--radius-sm)',
-                    background: activeLevelId === lvl.id && activeView !== 'section' ? 'rgba(37, 99, 235, 0.15)' : 'transparent',
-                    border: `1px solid ${activeLevelId === lvl.id && activeView !== 'section' ? 'var(--cad-blue)' : 'transparent'}`,
-                    fontSize: '12px',
-                    cursor: 'pointer',
+                    background: 'rgba(15, 23, 42, 0.9)',
+                    border: '1px solid var(--cad-blue)',
+                    marginBottom: 10,
                     display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'space-between',
-                    marginBottom: 4,
+                    flexDirection: 'column',
+                    gap: 8,
                   }}
                 >
-                  <span style={{ fontWeight: activeLevelId === lvl.id ? 600 : 400, flex: 1 }}>{lvl.name}</span>
-                  <span style={{ fontSize: '11px', color: 'var(--text-dim)', fontFamily: 'var(--font-mono)', marginRight: 6 }}>
-                    +{lvl.elevation.toFixed(2)}m
-                  </span>
-                  {levels.length > 1 && (
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        if (window.confirm(`Deseja realmente remover o nível "${lvl.name}"?`)) {
-                          bimStore.removeLevel(lvl.id);
-                        }
-                      }}
-                      title="Excluir nível"
+                  <div style={{ fontSize: '11px', fontWeight: 600, color: 'var(--cad-cyan)' }}>
+                    Novo Nível Paramétrico
+                  </div>
+                  <div>
+                    <div style={{ fontSize: '10px', color: 'var(--text-dim)', marginBottom: 2 }}>Nome:</div>
+                    <input
+                      type="text"
+                      value={newLevelName}
+                      onChange={(e) => setNewLevelName(e.target.value)}
+                      placeholder="Ex: 2º Pavimento"
                       style={{
-                        background: 'transparent',
-                        border: 'none',
-                        color: 'var(--text-dim)',
-                        cursor: 'pointer',
-                        padding: '2px',
+                        width: '100%',
+                        background: 'var(--bg-main)',
+                        border: '1px solid var(--border-color)',
                         borderRadius: '3px',
-                        display: 'flex',
-                        alignItems: 'center',
+                        color: 'var(--text-main)',
+                        fontSize: '11px',
+                        padding: '4px 6px',
+                        boxSizing: 'border-box',
+                      }}
+                    />
+                  </div>
+                  <div style={{ display: 'flex', gap: 6 }}>
+                    <div style={{ flex: 1 }}>
+                      <div style={{ fontSize: '10px', color: 'var(--text-dim)', marginBottom: 2 }}>Elevação (m):</div>
+                      <input
+                        type="number"
+                        step="0.10"
+                        value={newLevelElevation}
+                        onChange={(e) => setNewLevelElevation(e.target.value)}
+                        style={{
+                          width: '100%',
+                          background: 'var(--bg-main)',
+                          border: '1px solid var(--border-color)',
+                          borderRadius: '3px',
+                          color: 'var(--cad-cyan)',
+                          fontSize: '11px',
+                          padding: '4px 6px',
+                          boxSizing: 'border-box',
+                          fontFamily: 'var(--font-mono)',
+                        }}
+                      />
+                    </div>
+                    <div style={{ flex: 1 }}>
+                      <div style={{ fontSize: '10px', color: 'var(--text-dim)', marginBottom: 2 }}>Pé-Direito (m):</div>
+                      <input
+                        type="number"
+                        step="0.10"
+                        value={newLevelHeight}
+                        onChange={(e) => setNewLevelHeight(e.target.value)}
+                        style={{
+                          width: '100%',
+                          background: 'var(--bg-main)',
+                          border: '1px solid var(--border-color)',
+                          borderRadius: '3px',
+                          color: 'var(--text-main)',
+                          fontSize: '11px',
+                          padding: '4px 6px',
+                          boxSizing: 'border-box',
+                          fontFamily: 'var(--font-mono)',
+                        }}
+                      />
+                    </div>
+                  </div>
+                  <div style={{ display: 'flex', gap: 6, marginTop: 2 }}>
+                    <button
+                      onClick={() => {
+                        const elev = parseFloat(newLevelElevation.replace(',', '.')) || 0;
+                        const h = parseFloat(newLevelHeight.replace(',', '.')) || 2.8;
+                        bimStore.addLevel(newLevelName || `Pavimento ${levels.length + 1}`, elev, h);
+                        setShowAddLevel(false);
+                      }}
+                      style={{
+                        flex: 1,
+                        background: 'var(--cad-blue)',
+                        border: 'none',
+                        color: '#fff',
+                        fontSize: '11px',
+                        fontWeight: 600,
+                        padding: '4px 8px',
+                        borderRadius: '3px',
+                        cursor: 'pointer',
                       }}
                     >
-                      <Trash2 size={12} />
+                      Criar
                     </button>
-                  )}
+                    <button
+                      onClick={() => setShowAddLevel(false)}
+                      style={{
+                        background: 'transparent',
+                        border: '1px solid var(--border-color)',
+                        color: 'var(--text-dim)',
+                        fontSize: '11px',
+                        padding: '4px 8px',
+                        borderRadius: '3px',
+                        cursor: 'pointer',
+                      }}
+                    >
+                      Cancelar
+                    </button>
+                  </div>
                 </div>
-              ))}
+              )}
+
+              {/* Lista de Níveis com Edição Direta de Elevação e Pé-Direito */}
+              {levels.map((lvl) => {
+                const isSelected = activeLevelId === lvl.id && activeView !== 'section';
+                return (
+                  <div
+                    key={lvl.id}
+                    onClick={() => {
+                      bimStore.setActiveLevelId(lvl.id);
+                      if (activeView === 'section') {
+                        bimStore.setActiveView('plan');
+                      }
+                    }}
+                    style={{
+                      padding: '8px 10px',
+                      borderRadius: 'var(--radius-sm)',
+                      background: isSelected ? 'rgba(37, 99, 235, 0.15)' : 'rgba(255, 255, 255, 0.02)',
+                      border: `1px solid ${isSelected ? 'var(--cad-blue)' : 'var(--border-color)'}`,
+                      fontSize: '12px',
+                      cursor: 'pointer',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: 4,
+                      marginBottom: 6,
+                    }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                      <input
+                        value={lvl.name}
+                        onClick={(e) => e.stopPropagation()}
+                        onChange={(e) => bimStore.updateLevel(lvl.id, { name: e.target.value })}
+                        style={{
+                          background: 'transparent',
+                          border: 'none',
+                          color: isSelected ? 'var(--cad-cyan)' : 'var(--text-main)',
+                          fontSize: '12px',
+                          fontWeight: isSelected ? 600 : 400,
+                          flex: 1,
+                          cursor: 'text',
+                          padding: '1px 0',
+                          outline: 'none',
+                        }}
+                      />
+                      {levels.length > 1 && (
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            bimStore.removeLevel(lvl.id);
+                          }}
+                          title="Excluir nível"
+                          style={{
+                            background: 'transparent',
+                            border: 'none',
+                            color: 'var(--text-dim)',
+                            cursor: 'pointer',
+                            padding: '2px',
+                            borderRadius: '3px',
+                            display: 'flex',
+                            alignItems: 'center',
+                          }}
+                        >
+                          <Trash2 size={12} />
+                        </button>
+                      )}
+                    </div>
+
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: '11px', color: 'var(--text-dim)' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+                        <span>Cota:</span>
+                        <input
+                          type="number"
+                          step="0.10"
+                          value={lvl.elevation}
+                          onClick={(e) => e.stopPropagation()}
+                          onChange={(e) => {
+                            const val = parseFloat(e.target.value) || 0;
+                            bimStore.updateLevel(lvl.id, { elevation: val });
+                          }}
+                          style={{
+                            width: '46px',
+                            background: 'rgba(15, 23, 42, 0.7)',
+                            border: '1px solid var(--border-color)',
+                            borderRadius: '2px',
+                            color: 'var(--cad-cyan)',
+                            fontSize: '11px',
+                            padding: '1px 3px',
+                            textAlign: 'right',
+                            fontFamily: 'var(--font-mono)',
+                          }}
+                        />
+                        <span>m</span>
+                      </div>
+
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+                        <span>Pé-dir:</span>
+                        <input
+                          type="number"
+                          step="0.05"
+                          value={lvl.height ?? 2.8}
+                          onClick={(e) => e.stopPropagation()}
+                          onChange={(e) => {
+                            const val = parseFloat(e.target.value) || 2.8;
+                            bimStore.updateLevel(lvl.id, { height: val });
+                          }}
+                          style={{
+                            width: '42px',
+                            background: 'rgba(15, 23, 42, 0.7)',
+                            border: '1px solid var(--border-color)',
+                            borderRadius: '2px',
+                            color: 'var(--text-main)',
+                            fontSize: '11px',
+                            padding: '1px 3px',
+                            textAlign: 'right',
+                            fontFamily: 'var(--font-mono)',
+                          }}
+                        />
+                        <span>m</span>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
             </div>
 
             {/* Cortes Paramétricos */}
