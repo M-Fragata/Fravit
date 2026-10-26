@@ -138,6 +138,8 @@ export interface DimensionElement {
   end: Point2D;
   offset: number;
   levelId: string;
+  view?: 'plan' | 'section';
+  sectionId?: string;
 }
 
 export interface SectionElement {

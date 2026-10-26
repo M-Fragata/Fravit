@@ -244,12 +244,25 @@ export const bimStore = {
     emitChange();
   },
 
-  // Inverter sentido de abertura da porta (tecla Espaço)
+  // Inverter sentido de abertura da porta (tecla Espaço - Ciclo de 4 opções: lado e abertura)
   flipDoor: (doorId: string) => {
     const currentClone = structuredClone(currentState.elements);
     const updatedDoors = currentState.elements.doors.map((d) => {
       if (d.id === doorId) {
-        return { ...d, flipFacing: !d.flipFacing };
+        let nextFacing = d.flipFacing;
+        let nextHand = d.flipHand ?? false;
+        if (!nextFacing && !nextHand) {
+          nextHand = true;
+        } else if (!nextFacing && nextHand) {
+          nextFacing = true;
+          nextHand = false;
+        } else if (nextFacing && !nextHand) {
+          nextHand = true;
+        } else {
+          nextFacing = false;
+          nextHand = false;
+        }
+        return { ...d, flipFacing: nextFacing, flipHand: nextHand };
       }
       return d;
     });

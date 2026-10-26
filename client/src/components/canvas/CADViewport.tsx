@@ -1,6 +1,6 @@
 import React, { useRef, useEffect, useCallback, useState } from 'react';
 import * as THREE from 'three';
-import { useBIM, bimStore } from '../../cad-core/engine/bimStore';
+import { useBIM } from '../../cad-core/engine/bimStore';
 import type { Point2D } from '../../cad-core/types';
 import {
   getWallOpenings,
@@ -11,6 +11,7 @@ import {
 } from '../../cad-core/geometry/wallGeometry';
 import { distance } from '../../cad-core/snaps/snapEngine';
 import { CanvasOverlay } from './CanvasOverlay';
+import { SectionOverlay } from './SectionOverlay';
 
 interface CADViewportProps {
   onCursorMove?: (worldPos: Point2D) => void;
@@ -662,15 +663,20 @@ export const CADViewport: React.FC<CADViewportProps> = ({ onCursorMove }) => {
             addMeshWithEdges(postGeom, frameMaterial, lx, ly, baseElev + doorH / 2, angle);
             addMeshWithEdges(postGeom, frameMaterial, rx, ry, baseElev + doorH / 2, angle);
 
-            // Folha da Porta (aberta a 75 graus)
+            // Folha da Porta (aberta a ~75 graus, respeitando flipFacing e flipHand)
             const leafWidth = op.width - postW * 2;
             const leafGeom = new THREE.BoxGeometry(leafWidth, 0.035, doorH - 0.02);
-            const swingAngle = door.flipFacing ? -Math.PI / 2.3 : Math.PI / 2.3;
+            const isLeftHinge = !door.flipHand;
+            const hingeX = isLeftHinge ? lx : rx;
+            const hingeY = isLeftHinge ? ly : ry;
+            const baseDir = isLeftHinge ? 0 : Math.PI;
+            const swingSign = door.flipFacing ? -1 : 1;
+            const swingAngle = baseDir + (isLeftHinge ? swingSign * (Math.PI / 2.3) : -swingSign * (Math.PI / 2.3));
             addMeshWithEdges(
               leafGeom,
               doorLeafMaterial,
-              lx,
-              ly,
+              hingeX,
+              hingeY,
               baseElev + doorH / 2,
               angle + swingAngle
             );
@@ -872,6 +878,16 @@ export const CADViewport: React.FC<CADViewportProps> = ({ onCursorMove }) => {
           triggerRender={triggerRender}
           screenToWorld={screenToWorld}
           worldToScreen={worldToScreen}
+          onCursorMove={onCursorMove}
+        />
+      )}
+
+      {/* Overlay 2D Interativo para Vistas de Corte (Cotas Técnicas no Corte, Níveis e Snaps de Altura) */}
+      {activeView === 'section' && (
+        <SectionOverlay
+          sectionPanRef={sectionPanRef}
+          zoomRef={zoomRef}
+          triggerRender={triggerRender}
           onCursorMove={onCursorMove}
         />
       )}

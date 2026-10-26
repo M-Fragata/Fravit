@@ -21,6 +21,7 @@ import {
   detectClosedRoomPolygon,
   computeStairParameters,
 } from '../../cad-core/geometry/wallGeometry';
+import { drawRevitDimension } from '../../cad-core/geometry/revitDimension';
 
 interface CanvasOverlayProps {
   panRef: React.MutableRefObject<Point2D>;
@@ -49,6 +50,7 @@ export const CanvasOverlay: React.FC<CanvasOverlayProps> = ({
   const [currentSnapped, setCurrentSnapped] = useState<SnapResult | null>(null);
   const [numericInput, setNumericInput] = useState<string>('');
   const [doorFlipFacing, setDoorFlipFacing] = useState<boolean>(false);
+  const [doorFlipHand, setDoorFlipHand] = useState<boolean>(false);
   const [dimP1, setDimP1] = useState<Point2D | null>(null);
   const [dimP2, setDimP2] = useState<Point2D | null>(null);
   const [secP1, setSecP1] = useState<Point2D | null>(null);
@@ -172,8 +174,9 @@ export const CanvasOverlay: React.FC<CanvasOverlayProps> = ({
         const doorCy = host.start.y + uy * (door.offsetRatio * len);
         const halfW = door.width / 2;
 
-        const hingeX = doorCx - ux * halfW;
-        const hingeY = doorCy - uy * halfW;
+        const isLeftHinge = !door.flipHand;
+        const hingeX = isLeftHinge ? doorCx - ux * halfW : doorCx + ux * halfW;
+        const hingeY = isLeftHinge ? doorCy - uy * halfW : doorCy + uy * halfW;
         const hingeScreen = worldToScreen(hingeX, hingeY);
 
         const facingSign = door.flipFacing ? -1 : 1;
@@ -196,15 +199,16 @@ export const CanvasOverlay: React.FC<CanvasOverlayProps> = ({
         ctx.lineWidth = 1.2;
         ctx.beginPath();
         const baseAngle = Math.atan2(uy, ux);
-        const startAngle = baseAngle;
+        const startAngle = isLeftHinge ? baseAngle : baseAngle + Math.PI;
         const endAngle = baseAngle + (Math.PI / 2) * facingSign;
+        const anticlockwise = isLeftHinge ? facingSign > 0 : facingSign < 0;
         ctx.arc(
           hingeScreen.x,
           hingeScreen.y,
           door.width * zoom,
           -startAngle,
           -endAngle,
-          facingSign > 0
+          anticlockwise
         );
         ctx.stroke();
         ctx.restore();
@@ -350,75 +354,33 @@ export const CanvasOverlay: React.FC<CanvasOverlayProps> = ({
         ctx.fillText(areaStr, tagScreen.x, tagScreen.y + 12);
       });
 
-      // H. Cotas Existentes (Dimensions NBR / Revit)
-      elements.dimensions.forEach((dim) => {
-        const dx = dim.end.x - dim.start.x;
-        const dy = dim.end.y - dim.start.y;
-        const len = Math.sqrt(dx * dx + dy * dy);
-        if (len < 0.05) return;
+      // H. Cotas 2D Existentes no Padrão Revit / NBR
+      elements.dimensions
+        .filter((dim) => !dim.view || dim.view === 'plan')
+        .forEach((dim) => {
+          const dx = dim.end.x - dim.start.x;
+          const dy = dim.end.y - dim.start.y;
+          const len = Math.sqrt(dx * dx + dy * dy);
+          if (len < 0.05) return;
 
-        const ux = dx / len;
-        const uy = dy / len;
-        const nx = -uy;
-        const ny = ux;
+          const ux = dx / len;
+          const uy = dy / len;
+          const nx = -uy;
+          const ny = ux;
 
-        const offset = dim.offset || 0.4;
+          const offset = dim.offset || 0.4;
 
-        // Ponto deslocado da cota
-        const c1World = { x: dim.start.x + nx * offset, y: dim.start.y + ny * offset };
-        const c2World = { x: dim.end.x + nx * offset, y: dim.end.y + ny * offset };
+          // Ponto deslocado da cota
+          const c1World = { x: dim.start.x + nx * offset, y: dim.start.y + ny * offset };
+          const c2World = { x: dim.end.x + nx * offset, y: dim.end.y + ny * offset };
 
-        const s1 = worldToScreen(dim.start.x, dim.start.y);
-        const s2 = worldToScreen(dim.end.x, dim.end.y);
-        const sc1 = worldToScreen(c1World.x, c1World.y);
-        const sc2 = worldToScreen(c2World.x, c2World.y);
+          const s1 = worldToScreen(dim.start.x, dim.start.y);
+          const s2 = worldToScreen(dim.end.x, dim.end.y);
+          const sc1 = worldToScreen(c1World.x, c1World.y);
+          const sc2 = worldToScreen(c2World.x, c2World.y);
 
-        ctx.save();
-        ctx.strokeStyle = '#38bdf8';
-        ctx.lineWidth = 1.2;
-
-        // 1. Linhas de Extensão / Chamada
-        ctx.beginPath();
-        ctx.moveTo(s1.x, s1.y);
-        ctx.lineTo(sc1.x, sc1.y);
-        ctx.moveTo(s2.x, s2.y);
-        ctx.lineTo(sc2.x, sc2.y);
-        ctx.stroke();
-
-        // 2. Linha de Cota Principal
-        ctx.beginPath();
-        ctx.moveTo(sc1.x, sc1.y);
-        ctx.lineTo(sc2.x, sc2.y);
-        ctx.stroke();
-
-        // 3. Ticks Arquitetônicos a 45°
-        const tickSize = 6;
-        ctx.beginPath();
-        ctx.moveTo(sc1.x - tickSize, sc1.y + tickSize);
-        ctx.lineTo(sc1.x + tickSize, sc1.y - tickSize);
-        ctx.moveTo(sc2.x - tickSize, sc2.y + tickSize);
-        ctx.lineTo(sc2.x + tickSize, sc2.y - tickSize);
-        ctx.lineWidth = 1.8;
-        ctx.stroke();
-
-        // 4. Texto da Medida em metros
-        const midX = (sc1.x + sc2.x) / 2;
-        const midY = (sc1.y + sc2.y) / 2;
-        const text = `${len.toFixed(2)} m`;
-
-        ctx.font = '600 11px "JetBrains Mono", monospace';
-        const tw = ctx.measureText(text).width;
-        ctx.fillStyle = 'rgba(15, 23, 42, 0.95)';
-        ctx.beginPath();
-        ctx.roundRect(midX - tw / 2 - 4, midY - 9, tw + 8, 18, 4);
-        ctx.fill();
-        ctx.fillStyle = '#38bdf8';
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
-        ctx.fillText(text, midX, midY);
-
-        ctx.restore();
-      });
+          drawRevitDimension(ctx, s1, s2, sc1, sc2, len);
+        });
 
       // I. Linhas de Corte Existentes (Sections NBR)
       elements.sections.forEach((sec) => {
@@ -573,8 +535,9 @@ export const CanvasOverlay: React.FC<CanvasOverlayProps> = ({
           const cy = host.projectedPoint.y;
           const halfW = defaults.door.width / 2;
 
-          const hingeX = cx - ux * halfW;
-          const hingeY = cy - uy * halfW;
+          const isLeftHinge = !doorFlipHand;
+          const hingeX = isLeftHinge ? cx - ux * halfW : cx + ux * halfW;
+          const hingeY = isLeftHinge ? cy - uy * halfW : cy + uy * halfW;
           const hingeScreen = worldToScreen(hingeX, hingeY);
 
           const facingSign = doorFlipFacing ? -1 : 1;
@@ -597,13 +560,16 @@ export const CanvasOverlay: React.FC<CanvasOverlayProps> = ({
           ctx.lineWidth = 2;
           ctx.beginPath();
           const baseAngle = Math.atan2(uy, ux);
+          const startAngle = isLeftHinge ? baseAngle : baseAngle + Math.PI;
+          const endAngle = baseAngle + (Math.PI / 2) * facingSign;
+          const anticlockwise = isLeftHinge ? facingSign > 0 : facingSign < 0;
           ctx.arc(
             hingeScreen.x,
             hingeScreen.y,
             defaults.door.width * zoom,
-            -baseAngle,
-            -(baseAngle + (Math.PI / 2) * facingSign),
-            facingSign > 0
+            -startAngle,
+            -endAngle,
+            anticlockwise
           );
           ctx.stroke();
           ctx.restore();
@@ -624,7 +590,7 @@ export const CanvasOverlay: React.FC<CanvasOverlayProps> = ({
 
             const vx = -(st.y - sf.y);
             const vy = st.x - sf.x;
-            const vlen = Math.sqrt(vx * vx + vy * vy);
+            const vlen = Math.hypot(vx, vy);
             if (vlen < 0.01) return;
             const nx = (vx / vlen) * offsetPx;
             const ny = (vy / vlen) * offsetPx;
@@ -632,53 +598,10 @@ export const CanvasOverlay: React.FC<CanvasOverlayProps> = ({
             const dStart = { x: sf.x + nx, y: sf.y + ny };
             const dEnd = { x: st.x + nx, y: st.y + ny };
 
-            ctx.save();
-            ctx.strokeStyle = '#38bdf8';
-            ctx.lineWidth = 1.2;
-
-            // Linhas de chamada
-            ctx.beginPath();
-            ctx.moveTo(sf.x, sf.y);
-            ctx.lineTo(dStart.x, dStart.y);
-            ctx.moveTo(st.x, st.y);
-            ctx.lineTo(dEnd.x, dEnd.y);
-            ctx.stroke();
-
-            // Linha da cota
-            ctx.beginPath();
-            ctx.moveTo(dStart.x, dStart.y);
-            ctx.lineTo(dEnd.x, dEnd.y);
-            ctx.stroke();
-
-            // Ticks a 45°
-            const tk = 4;
-            ctx.beginPath();
-            ctx.moveTo(dStart.x - tk, dStart.y + tk);
-            ctx.lineTo(dStart.x + tk, dStart.y - tk);
-            ctx.moveTo(dEnd.x - tk, dEnd.y + tk);
-            ctx.lineTo(dEnd.x + tk, dEnd.y - tk);
-            ctx.stroke();
-
-            // Badge numérico em azul ciano
-            const midDimX = (dStart.x + dEnd.x) / 2;
-            const midDimY = (dStart.y + dEnd.y) / 2;
-            const label = `${distVal.toFixed(2)} m`;
-            ctx.font = '700 11px "JetBrains Mono", monospace';
-            const lw = ctx.measureText(label).width;
-
-            ctx.fillStyle = 'rgba(15, 23, 42, 0.95)';
-            ctx.strokeStyle = '#38bdf8';
-            ctx.lineWidth = 1;
-            ctx.beginPath();
-            ctx.roundRect(midDimX - lw / 2 - 6, midDimY - 10, lw + 12, 20, 4);
-            ctx.fill();
-            ctx.stroke();
-
-            ctx.fillStyle = '#38bdf8';
-            ctx.textAlign = 'center';
-            ctx.textBaseline = 'middle';
-            ctx.fillText(label, midDimX, midDimY);
-            ctx.restore();
+            drawRevitDimension(ctx, sf, st, dStart, dEnd, distVal, {
+              color: '#38bdf8',
+              textColor: '#38bdf8',
+            });
           };
 
           // Desenha as duas cotas temporárias da porta até as extremidades da parede
@@ -692,7 +615,7 @@ export const CanvasOverlay: React.FC<CanvasOverlayProps> = ({
           ctx.strokeStyle = '#f59e0b';
           ctx.lineWidth = 1;
           ctx.font = '600 11px "Inter", sans-serif';
-          const tipText = 'Clique para fixar porta • [Espaço] inverte lado';
+          const tipText = 'Clique para fixar porta • [Espaço] 4 opções (lado / abertura)';
           const tipW = ctx.measureText(tipText).width;
           ctx.beginPath();
           ctx.roundRect(hingeScreen.x - tipW / 2, hingeScreen.y - 36, tipW + 16, 22, 4);
@@ -960,44 +883,9 @@ export const CanvasOverlay: React.FC<CanvasOverlayProps> = ({
             const sc1 = worldToScreen(c1.x, c1.y);
             const sc2 = worldToScreen(c2.x, c2.y);
 
-            ctx.save();
-            ctx.strokeStyle = '#38bdf8';
-            ctx.lineWidth = 1.2;
-
-            ctx.beginPath();
-            ctx.moveTo(s1.x, s1.y);
-            ctx.lineTo(sc1.x, sc1.y);
-            ctx.moveTo(s2.x, s2.y);
-            ctx.lineTo(sc2.x, sc2.y);
-            ctx.stroke();
-
-            ctx.beginPath();
-            ctx.moveTo(sc1.x, sc1.y);
-            ctx.lineTo(sc2.x, sc2.y);
-            ctx.stroke();
-
-            const ts = 6;
-            ctx.beginPath();
-            ctx.moveTo(sc1.x - ts, sc1.y + ts);
-            ctx.lineTo(sc1.x + ts, sc1.y - ts);
-            ctx.moveTo(sc2.x - ts, sc2.y + ts);
-            ctx.lineTo(sc2.x + ts, sc2.y - ts);
-            ctx.lineWidth = 1.8;
-            ctx.stroke();
-
-            const mx = (sc1.x + sc2.x) / 2;
-            const my = (sc1.y + sc2.y) / 2;
-            const label = `${len.toFixed(2)} m • Clique para fixar posição da cota`;
-            ctx.font = '600 11px "JetBrains Mono", monospace';
-            const lw = ctx.measureText(label).width;
-            ctx.fillStyle = 'rgba(15, 23, 42, 0.95)';
-            ctx.beginPath();
-            ctx.roundRect(mx - lw / 2 - 6, my - 22, lw + 12, 20, 4);
-            ctx.fill();
-            ctx.fillStyle = '#38bdf8';
-            ctx.textAlign = 'center';
-            ctx.fillText(label, mx, my - 8);
-            ctx.restore();
+            drawRevitDimension(ctx, s1, s2, sc1, sc2, len, {
+              extraNote: 'Clique para fixar posição da cota',
+            });
           }
         }
       }
@@ -1276,6 +1164,7 @@ export const CanvasOverlay: React.FC<CanvasOverlayProps> = ({
     polygonPoints,
     currentSnapped,
     doorFlipFacing,
+    doorFlipHand,
     activeTool,
     defaults,
     elements,
@@ -1371,7 +1260,26 @@ export const CanvasOverlay: React.FC<CanvasOverlayProps> = ({
       if (e.code === 'Space') {
         if (activeTool === 'door') {
           e.preventDefault();
-          setDoorFlipFacing((prev) => !prev);
+          // Ciclo de 4 opções: (false, false) -> (false, true) -> (true, false) -> (true, true) -> (false, false)
+          if (!doorFlipFacing && !doorFlipHand) {
+            setDoorFlipHand(true);
+          } else if (!doorFlipFacing && doorFlipHand) {
+            setDoorFlipFacing(true);
+            setDoorFlipHand(false);
+          } else if (doorFlipFacing && !doorFlipHand) {
+            setDoorFlipHand(true);
+          } else {
+            setDoorFlipFacing(false);
+            setDoorFlipHand(false);
+          }
+        } else if (activeTool === 'select' && state.selectedElementIds.length > 0) {
+          const selDoor = elements.doors.find((d) => state.selectedElementIds.includes(d.id));
+          if (selDoor) {
+            e.preventDefault();
+            bimStore.flipDoor(selDoor.id);
+          } else {
+            isSpacePressedRef.current = true;
+          }
         } else {
           isSpacePressedRef.current = true;
         }
@@ -1444,6 +1352,10 @@ export const CanvasOverlay: React.FC<CanvasOverlayProps> = ({
     activeTool,
     defaults,
     activeLevelId,
+    doorFlipFacing,
+    doorFlipHand,
+    state.selectedElementIds,
+    elements.doors,
   ]);
 
   // Manipulação de Ponteiro com setPointerCapture para Pan Confiável com Scroll e Botão Direito
@@ -1503,7 +1415,7 @@ export const CanvasOverlay: React.FC<CanvasOverlayProps> = ({
             width: defaults.door.width,
             height: defaults.door.height,
             flipFacing: doorFlipFacing,
-            flipHand: false,
+            flipHand: doorFlipHand,
             levelId: activeLevelId,
           };
           bimStore.addDoor(newDoor);
