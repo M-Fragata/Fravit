@@ -106,6 +106,45 @@ export const EditorPreview: React.FC<EditorPreviewProps> = ({ projectId, onBack 
         return;
       }
 
+      // Tecla Escape: cancela ferramentas e vai para select
+      if (e.key === 'Escape') {
+        bimStore.setActiveTool('select');
+        return;
+      }
+
+      // Atalhos Revit de 2 Letras
+      if (!e.ctrlKey && !e.metaKey && !e.altKey && e.key.length === 1 && /[a-zA-Z]/.test(e.key)) {
+        (window as any).__revitShortcut = ((window as any).__revitShortcut || '') + e.key.toLowerCase();
+        if ((window as any).__revitTimer) clearTimeout((window as any).__revitTimer);
+        (window as any).__revitTimer = setTimeout(() => {
+          (window as any).__revitShortcut = '';
+        }, 900);
+
+        const buf = (window as any).__revitShortcut;
+        const toolMap: Record<string, any> = {
+          wa: 'wall',
+          dr: 'door',
+          wn: 'window',
+          fl: 'floor',
+          ro: 'roof',
+          st: 'stair',
+          rm: 'room',
+          rs: 'roomSeparator',
+          di: 'dimension',
+          sc: 'section',
+        };
+
+        if (toolMap[buf]) {
+          bimStore.setActiveTool(toolMap[buf]);
+          (window as any).__revitShortcut = '';
+          return;
+        }
+
+        if ((window as any).__revitShortcut.length >= 2) {
+          (window as any).__revitShortcut = e.key.toLowerCase();
+        }
+      }
+
       // Salvar: Ctrl+S / Cmd+S
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
         e.preventDefault();

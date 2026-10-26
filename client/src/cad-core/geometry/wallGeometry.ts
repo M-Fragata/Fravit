@@ -216,6 +216,22 @@ export interface WallJoint {
   thickness: number;
 }
 
+// Checa se uma extremidade de parede está conectada a outra parede
+export function isWallEndpointConnected(
+  point: Point2D,
+  currentWallId: string,
+  walls: WallElement[],
+  threshold: number = 0.12
+): boolean {
+  for (const wall of walls) {
+    if (wall.id === currentWallId) continue;
+    if (distance(point, wall.start) <= threshold || distance(point, wall.end) <= threshold) {
+      return true;
+    }
+  }
+  return false;
+}
+
 export function findWallJoints(walls: WallElement[]): WallJoint[] {
   const joints: WallJoint[] = [];
   const threshold = 0.08; // 8cm para tolerância de junção

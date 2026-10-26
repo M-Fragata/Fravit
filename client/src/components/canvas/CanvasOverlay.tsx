@@ -438,6 +438,85 @@ export const CanvasOverlay: React.FC<CanvasOverlayProps> = ({
           ctx.stroke();
           ctx.restore();
 
+          // Cotas Temporárias do Revit: distâncias laterais até as extremidades da parede
+          const distToStart = Math.max(0, host.ratio * len - halfW);
+          const distToEnd = Math.max(0, len - (host.ratio * len + halfW));
+
+          const drawTempDimension = (
+            pFrom: Point2D,
+            pTo: Point2D,
+            distVal: number,
+            offsetPx: number
+          ) => {
+            if (distVal < 0.05) return;
+            const sf = worldToScreen(pFrom.x, pFrom.y);
+            const st = worldToScreen(pTo.x, pTo.y);
+
+            const vx = -(st.y - sf.y);
+            const vy = st.x - sf.x;
+            const vlen = Math.sqrt(vx * vx + vy * vy);
+            if (vlen < 0.01) return;
+            const nx = (vx / vlen) * offsetPx;
+            const ny = (vy / vlen) * offsetPx;
+
+            const dStart = { x: sf.x + nx, y: sf.y + ny };
+            const dEnd = { x: st.x + nx, y: st.y + ny };
+
+            ctx.save();
+            ctx.strokeStyle = '#38bdf8';
+            ctx.lineWidth = 1.2;
+
+            // Linhas de chamada
+            ctx.beginPath();
+            ctx.moveTo(sf.x, sf.y);
+            ctx.lineTo(dStart.x, dStart.y);
+            ctx.moveTo(st.x, st.y);
+            ctx.lineTo(dEnd.x, dEnd.y);
+            ctx.stroke();
+
+            // Linha da cota
+            ctx.beginPath();
+            ctx.moveTo(dStart.x, dStart.y);
+            ctx.lineTo(dEnd.x, dEnd.y);
+            ctx.stroke();
+
+            // Ticks a 45°
+            const tk = 4;
+            ctx.beginPath();
+            ctx.moveTo(dStart.x - tk, dStart.y + tk);
+            ctx.lineTo(dStart.x + tk, dStart.y - tk);
+            ctx.moveTo(dEnd.x - tk, dEnd.y + tk);
+            ctx.lineTo(dEnd.x + tk, dEnd.y - tk);
+            ctx.stroke();
+
+            // Badge numérico em azul ciano
+            const midDimX = (dStart.x + dEnd.x) / 2;
+            const midDimY = (dStart.y + dEnd.y) / 2;
+            const label = `${distVal.toFixed(2)} m`;
+            ctx.font = '700 11px "JetBrains Mono", monospace';
+            const lw = ctx.measureText(label).width;
+
+            ctx.fillStyle = 'rgba(15, 23, 42, 0.95)';
+            ctx.strokeStyle = '#38bdf8';
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.roundRect(midDimX - lw / 2 - 6, midDimY - 10, lw + 12, 20, 4);
+            ctx.fill();
+            ctx.stroke();
+
+            ctx.fillStyle = '#38bdf8';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(label, midDimX, midDimY);
+            ctx.restore();
+          };
+
+          // Desenha as duas cotas temporárias da porta até as extremidades da parede
+          const doorStartPoint = { x: cx - ux * halfW, y: cy - uy * halfW };
+          const doorEndPoint = { x: cx + ux * halfW, y: cy + uy * halfW };
+          drawTempDimension(host.wall.start, doorStartPoint, distToStart, 26);
+          drawTempDimension(doorEndPoint, host.wall.end, distToEnd, 26);
+
           // Dica Flutuante
           ctx.fillStyle = 'rgba(15, 23, 42, 0.95)';
           ctx.strokeStyle = '#f59e0b';
@@ -478,6 +557,83 @@ export const CanvasOverlay: React.FC<CanvasOverlayProps> = ({
           ctx.strokeStyle = '#38bdf8';
           ctx.lineWidth = 4;
           ctx.stroke();
+
+          // Cotas Temporárias do Revit para Janela
+          const distToStart = Math.max(0, host.ratio * len - halfW);
+          const distToEnd = Math.max(0, len - (host.ratio * len + halfW));
+
+          const drawTempDimension = (
+            pFrom: Point2D,
+            pTo: Point2D,
+            distVal: number,
+            offsetPx: number
+          ) => {
+            if (distVal < 0.05) return;
+            const sf = worldToScreen(pFrom.x, pFrom.y);
+            const st = worldToScreen(pTo.x, pTo.y);
+
+            const vx = -(st.y - sf.y);
+            const vy = st.x - sf.x;
+            const vlen = Math.sqrt(vx * vx + vy * vy);
+            if (vlen < 0.01) return;
+            const nx = (vx / vlen) * offsetPx;
+            const ny = (vy / vlen) * offsetPx;
+
+            const dStart = { x: sf.x + nx, y: sf.y + ny };
+            const dEnd = { x: st.x + nx, y: st.y + ny };
+
+            ctx.save();
+            ctx.strokeStyle = '#38bdf8';
+            ctx.lineWidth = 1.2;
+
+            // Linhas de chamada
+            ctx.beginPath();
+            ctx.moveTo(sf.x, sf.y);
+            ctx.lineTo(dStart.x, dStart.y);
+            ctx.moveTo(st.x, st.y);
+            ctx.lineTo(dEnd.x, dEnd.y);
+            ctx.stroke();
+
+            // Linha da cota
+            ctx.beginPath();
+            ctx.moveTo(dStart.x, dStart.y);
+            ctx.lineTo(dEnd.x, dEnd.y);
+            ctx.stroke();
+
+            // Ticks a 45°
+            const tk = 4;
+            ctx.beginPath();
+            ctx.moveTo(dStart.x - tk, dStart.y + tk);
+            ctx.lineTo(dStart.x + tk, dStart.y - tk);
+            ctx.moveTo(dEnd.x - tk, dEnd.y + tk);
+            ctx.lineTo(dEnd.x + tk, dEnd.y - tk);
+            ctx.stroke();
+
+            const midDimX = (dStart.x + dEnd.x) / 2;
+            const midDimY = (dStart.y + dEnd.y) / 2;
+            const label = `${distVal.toFixed(2)} m`;
+            ctx.font = '700 11px "JetBrains Mono", monospace';
+            const lw = ctx.measureText(label).width;
+
+            ctx.fillStyle = 'rgba(15, 23, 42, 0.95)';
+            ctx.strokeStyle = '#38bdf8';
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.roundRect(midDimX - lw / 2 - 6, midDimY - 10, lw + 12, 20, 4);
+            ctx.fill();
+            ctx.stroke();
+
+            ctx.fillStyle = '#38bdf8';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(label, midDimX, midDimY);
+            ctx.restore();
+          };
+
+          const winStartPoint = { x: cx - ux * halfW, y: cy - uy * halfW };
+          const winEndPoint = { x: cx + ux * halfW, y: cy + uy * halfW };
+          drawTempDimension(host.wall.start, winStartPoint, distToStart, 26);
+          drawTempDimension(winEndPoint, host.wall.end, distToEnd, 26);
 
           ctx.fillStyle = 'rgba(15, 23, 42, 0.95)';
           ctx.strokeStyle = '#38bdf8';
@@ -663,9 +819,71 @@ export const CanvasOverlay: React.FC<CanvasOverlayProps> = ({
     zoomRef,
   ]);
 
-  // 3. Captura Global de Teclado (F8, Escape, Tecla Espaço, Entrada Numérica direta)
+  const shortcutBufferRef = useRef<string>('');
+  const shortcutTimerRef = useRef<any>(null);
+
+  // 3. Captura Global de Teclado (Atalhos Revit de 2 letras, Escape, F8, Espaço, Entrada Numérica direta)
   useEffect(() => {
     const handleGlobalKeyDown = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement;
+      if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA')) {
+        return;
+      }
+
+      // Tecla Escape: cancela qualquer operação ativa e VAI DIRETO para Modificar / Selecionar (select)
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        setDrawingStart(null);
+        setPolygonPoints([]);
+        setNumericInput('');
+        bimStore.setActiveTool('select');
+        return;
+      }
+
+      // Desfazer: Ctrl+Z
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
+        setDrawingStart(null);
+        setPolygonPoints([]);
+        setNumericInput('');
+      }
+
+      // Atalhos de Teclado de 2 letras no estilo Revit (WA, DR, WN, FL, RO, ST, RM, RS, DI, SC)
+      if (!e.ctrlKey && !e.metaKey && !e.altKey && e.key.length === 1 && /[a-zA-Z]/.test(e.key)) {
+        // Se estiver no meio de entrada numérica para parede, letras não entram no numericInput
+        shortcutBufferRef.current += e.key.toLowerCase();
+        if (shortcutTimerRef.current) clearTimeout(shortcutTimerRef.current);
+        shortcutTimerRef.current = setTimeout(() => {
+          shortcutBufferRef.current = '';
+        }, 900);
+
+        const buf = shortcutBufferRef.current;
+        const toolMap: Record<string, any> = {
+          wa: 'wall',
+          dr: 'door',
+          wn: 'window',
+          fl: 'floor',
+          ro: 'roof',
+          st: 'stair',
+          rm: 'room',
+          rs: 'roomSeparator',
+          di: 'dimension',
+          sc: 'section',
+        };
+
+        if (toolMap[buf]) {
+          bimStore.setActiveTool(toolMap[buf]);
+          setDrawingStart(null);
+          setPolygonPoints([]);
+          setNumericInput('');
+          shortcutBufferRef.current = '';
+          return;
+        }
+
+        if (shortcutBufferRef.current.length >= 2) {
+          shortcutBufferRef.current = e.key.toLowerCase();
+        }
+      }
+
       if (e.code === 'Space') {
         if (activeTool === 'door') {
           e.preventDefault();
@@ -679,13 +897,6 @@ export const CanvasOverlay: React.FC<CanvasOverlayProps> = ({
         e.preventDefault();
         bimStore.toggleOrtho();
         return;
-      }
-
-      if (e.key === 'Escape' || ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z')) {
-        setDrawingStart(null);
-        setPolygonPoints([]);
-        setNumericInput('');
-        if (e.key === 'Escape') return;
       }
 
       // Entrada numérica direta ao desenhar paredes

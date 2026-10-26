@@ -5,7 +5,7 @@ import type { Point2D } from '../../cad-core/types';
 import {
   getWallOpenings,
   getSolidWallSegments,
-  findWallJoints,
+  isWallEndpointConnected,
 } from '../../cad-core/geometry/wallGeometry';
 import { CanvasOverlay } from './CanvasOverlay';
 
@@ -374,20 +374,65 @@ export const CADViewport: React.FC<CADViewportProps> = ({ onCursorMove }) => {
       const openings = getWallOpenings(wall, elements.doors, elements.windows);
       const solidSegments = getSolidWallSegments(wall, openings);
 
-      // 1. Segmentos Sólidos de Alvenaria
+      // 1. Segmentos Sólidos de Alvenaria com Junção Limpa (sem linhas cruzadas nos cantos)
       solidSegments.forEach((seg) => {
         if (seg.length < 0.02) return;
         const segMidX = (seg.start.x + seg.end.x) / 2;
         const segMidY = (seg.start.y + seg.end.y) / 2;
-        const segGeom = new THREE.BoxGeometry(seg.length, wallThickness, wallHeight);
-        addMeshWithEdges(
-          segGeom,
-          is3D ? wall3DMaterial : wall2DMaterial,
-          segMidX,
-          segMidY,
-          wallHeight / 2,
-          angle
-        );
+        const segLen = seg.length;
+
+        const geom = new THREE.BoxGeometry(segLen, wallThickness, wallHeight);
+        const mesh = new THREE.Mesh(geom, is3D ? wall3DMaterial : wall2DMaterial);
+        mesh.position.set(segMidX, segMidY, wallHeight / 2);
+        mesh.rotation.z = angle;
+        mesh.castShadow = is3D;
+        mesh.receiveShadow = is3D;
+
+        // Arestas Inteligentes: desenha as linhas longitudinais e SÓ fecha as tampas se a ponta for LIVRE
+        const startConnected = isWallEndpointConnected(seg.start, wall.id, elements.walls);
+        const endConnected = isWallEndpointConnected(seg.end, wall.id, elements.walls);
+
+        const halfL = segLen / 2;
+        const halfW = wallThickness / 2;
+        const topZ = wallHeight / 2;
+        const botZ = -wallHeight / 2;
+
+        const edgePoints: THREE.Vector3[] = [];
+
+        // Linhas longitudinais do topo (lado esquerdo e direito)
+        edgePoints.push(new THREE.Vector3(-halfL, halfW, topZ), new THREE.Vector3(halfL, halfW, topZ));
+        edgePoints.push(new THREE.Vector3(-halfL, -halfW, topZ), new THREE.Vector3(halfL, -halfW, topZ));
+
+        if (is3D) {
+          // Linhas longitudinais da base
+          edgePoints.push(new THREE.Vector3(-halfL, halfW, botZ), new THREE.Vector3(halfL, halfW, botZ));
+          edgePoints.push(new THREE.Vector3(-halfL, -halfW, botZ), new THREE.Vector3(halfL, -halfW, botZ));
+        }
+
+        // Tampa da ponta inicial: SÓ desenha se NÃO estiver conectada a outra parede
+        if (!startConnected) {
+          edgePoints.push(new THREE.Vector3(-halfL, -halfW, topZ), new THREE.Vector3(-halfL, halfW, topZ));
+          if (is3D) {
+            edgePoints.push(new THREE.Vector3(-halfL, -halfW, botZ), new THREE.Vector3(-halfL, halfW, botZ));
+            edgePoints.push(new THREE.Vector3(-halfL, -halfW, botZ), new THREE.Vector3(-halfL, -halfW, topZ));
+            edgePoints.push(new THREE.Vector3(-halfL, halfW, botZ), new THREE.Vector3(-halfL, halfW, topZ));
+          }
+        }
+
+        // Tampa da ponta final: SÓ desenha se NÃO estiver conectada a outra parede
+        if (!endConnected) {
+          edgePoints.push(new THREE.Vector3(halfL, -halfW, topZ), new THREE.Vector3(halfL, halfW, topZ));
+          if (is3D) {
+            edgePoints.push(new THREE.Vector3(halfL, -halfW, botZ), new THREE.Vector3(halfL, halfW, botZ));
+            edgePoints.push(new THREE.Vector3(halfL, -halfW, botZ), new THREE.Vector3(halfL, -halfW, topZ));
+            edgePoints.push(new THREE.Vector3(halfL, halfW, botZ), new THREE.Vector3(halfL, halfW, topZ));
+          }
+        }
+
+        const edgeGeom = new THREE.BufferGeometry().setFromPoints(edgePoints);
+        const edgeLine = new THREE.LineSegments(edgeGeom, is3D ? edgeMaterial3D : edgeMaterial2D);
+        mesh.add(edgeLine);
+        group.add(mesh);
       });
 
       // 2. Vãos com Dintel, Peitoril, Janelas e Portas
@@ -489,29 +534,6 @@ export const CADViewport: React.FC<CADViewportProps> = ({ onCursorMove }) => {
           }
         }
       });
-    });
-
-    // E. JUNÇÕES MITER MONOLÍTICAS NOS CANTOS DAS PAREDES
-    // Elimina arestas pretas cruzadas ou vácuos entre paredes adjacentes
-    const joints = findWallJoints(elements.walls);
-    joints.forEach((joint) => {
-      const radius = joint.thickness / 2;
-      const cornerGeom = new THREE.CylinderGeometry(
-        radius,
-        radius,
-        2.8,
-        16
-      );
-      // Três.js Cylinder é alinhado no eixo Y, rotacionamos para o eixo Z (altura)
-      cornerGeom.rotateX(Math.PI / 2);
-      const cornerMesh = new THREE.Mesh(
-        cornerGeom,
-        is3D ? wall3DMaterial : wall2DMaterial
-      );
-      cornerMesh.position.set(joint.point.x, joint.point.y, 1.4);
-      cornerMesh.castShadow = is3D;
-      cornerMesh.receiveShadow = is3D;
-      group.add(cornerMesh);
     });
   }, [
     elements.walls,

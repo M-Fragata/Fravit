@@ -134,35 +134,87 @@ export function computeSnap(
     }
   }
 
-  // 3. Rastreamento Polar (Snap magnético em 45°, 90°, 135°, etc.)
-  if (config.polarTracking && drawingStart) {
-    const polar = applyPolar(drawingStart, candidatePoint);
-    if (polar.isPolar) {
-      const dx = candidatePoint.x - drawingStart.x;
-      const dy = candidatePoint.y - drawingStart.y;
-      let len = Math.sqrt(dx * dx + dy * dy);
+  // 3. Rastreamento Polar e Alinhamento com Outras Paredes (Alignment Tracking)
+  if (drawingStart) {
+    let guideLines: { start: Point2D; end: Point2D; isPolar?: boolean }[] = [];
+    let alignedPoint = { ...candidatePoint };
+    let polarAngleResult: number | undefined;
 
-      // Se Grid Snap estiver ativo, arredonda o comprimento mantendo o ângulo polar exato!
-      if (config.gridSnap) {
-        len = Math.max(config.gridSize, Math.round(len / config.gridSize) * config.gridSize);
+    // A. Polar Tracking
+    if (config.polarTracking || config.orthoMode) {
+      const polar = config.orthoMode
+        ? { isPolar: true, angleDeg: 0, snapRad: 0, point: applyOrtho(drawingStart, candidatePoint) }
+        : applyPolar(drawingStart, candidatePoint);
+
+      if (polar.isPolar) {
+        const dx = candidatePoint.x - drawingStart.x;
+        const dy = candidatePoint.y - drawingStart.y;
+        let len = Math.sqrt(dx * dx + dy * dy);
+
+        if (config.gridSnap) {
+          len = Math.max(config.gridSize, Math.round(len / config.gridSize) * config.gridSize);
+        }
+
+        const snapAngle = config.orthoMode
+          ? Math.abs(dx) >= Math.abs(dy)
+            ? (dx >= 0 ? 0 : Math.PI)
+            : (dy >= 0 ? Math.PI / 2 : (3 * Math.PI) / 2)
+          : polar.snapRad;
+
+        alignedPoint = {
+          x: drawingStart.x + len * Math.cos(snapAngle),
+          y: drawingStart.y + len * Math.sin(snapAngle),
+        };
+        polarAngleResult = config.orthoMode ? Math.round((snapAngle * 180) / Math.PI) : polar.angleDeg;
+
+        // Raio polar estendido
+        const rayEnd: Point2D = {
+          x: drawingStart.x + (len + 15) * Math.cos(snapAngle),
+          y: drawingStart.y + (len + 15) * Math.sin(snapAngle),
+        };
+        guideLines.push({ start: drawingStart, end: rayEnd, isPolar: true });
+      }
+    }
+
+    // B. Extension / Alignment Tracking com Endpoints de outras Paredes (Estilo Revit / AutoCAD)
+    // Permite que uma parede inferior encontre o alinhamento exato de uma parede superior
+    const alignThreshold = Math.max(0.25, worldThreshold * 1.5);
+    const otherPoints: Point2D[] = [];
+    walls.forEach((w) => {
+      if (distance(w.start, drawingStart) > 0.05) otherPoints.push(w.start);
+      if (distance(w.end, drawingStart) > 0.05) otherPoints.push(w.end);
+    });
+
+    for (const pt of otherPoints) {
+      // Alinhamento Vertical (mesmo X): desenha linha guia vertical do ponto de referência até o cursor
+      if (Math.abs(alignedPoint.x - pt.x) <= alignThreshold) {
+        alignedPoint.x = pt.x;
+        guideLines.push({
+          start: { x: pt.x, y: pt.y },
+          end: { x: pt.x, y: alignedPoint.y },
+          isPolar: false,
+        });
+        break;
       }
 
-      const lockedPoint: Point2D = {
-        x: drawingStart.x + len * Math.cos(polar.snapRad),
-        y: drawingStart.y + len * Math.sin(polar.snapRad),
-      };
+      // Alinhamento Horizontal (mesmo Y): desenha linha guia horizontal do ponto de referência até o cursor
+      if (Math.abs(alignedPoint.y - pt.y) <= alignThreshold) {
+        alignedPoint.y = pt.y;
+        guideLines.push({
+          start: { x: pt.x, y: pt.y },
+          end: { x: alignedPoint.x, y: pt.y },
+          isPolar: false,
+        });
+        break;
+      }
+    }
 
-      // Raio pontilhado que se estende além do cursor para visualização clara do alinhamento
-      const rayEnd: Point2D = {
-        x: drawingStart.x + (len + 15) * Math.cos(polar.snapRad),
-        y: drawingStart.y + (len + 15) * Math.sin(polar.snapRad),
-      };
-
+    if (guideLines.length > 0) {
       return {
-        point: lockedPoint,
+        point: alignedPoint,
         type: 'grid',
-        polarAngle: polar.angleDeg,
-        guideLines: [{ start: drawingStart, end: rayEnd, isPolar: true }],
+        polarAngle: polarAngleResult,
+        guideLines,
       };
     }
   }
