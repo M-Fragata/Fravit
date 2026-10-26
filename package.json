@@ -1,0 +1,11 @@
+{
+  "name": "fravit",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Fravit - Software BIM/CAD de Desenho Técnico e Modelagem 3D",
+  "scripts": {
+    "server": "cmd /c \"set PATH=D:\\Node;%PATH% && cd server && node --env-file=.env --watch --experimental-strip-types src/index.ts\"",
+    "client": "cmd /c \"set PATH=D:\\Node;%PATH% && cd client && npm run dev\"",
+    "dev": "cmd /c \"start cmd /k npm run server && start cmd /k npm run client\""
+  }
+}

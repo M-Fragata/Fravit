@@ -1,0 +1,13 @@
+node_modules/
+dist/
+*.local
+*.log
+
+# Banco de dados SQLite local
+server/fravit.db
+server/fravit.db-journal
+server/fravit.db-wal
+server/fravit.db-shm
+
+# Variáveis de ambiente locais
+.env.local
