@@ -232,90 +232,99 @@ export function isWallEndpointConnected(
   return false;
 }
 
-export interface CornerJoint {
-  point: Point2D;
-  thickness: number;
-  height: number;
-  wallAId: string;
-  wallBId: string;
-  dirA: Point2D;
-  dirB: Point2D;
-  outerCorner: Point2D;
-  innerCorner: Point2D;
-  edgeStartA: Point2D;
-  edgeStartB: Point2D;
+export interface WallEndpointAnalysis {
+  connected: boolean;
+  otherWall?: WallElement;
+  isDominant: boolean; // se for dominante (ex: horizontal), estende para fora e desenha tampa de quina
+  drawCap: boolean;    // true se deve desenhar tampa na ponta
+  extendAmount: number; // positivo estende para fora, negativo recua para dentro
+  connectedSide: 1 | -1 | 0; // lado local da parede (+halfW ou -halfW) virado para a outra parede
 }
 
-export function findCornerJoints(walls: WallElement[]): CornerJoint[] {
-  const corners: CornerJoint[] = [];
-  const threshold = 0.12;
+export function analyzeWallEndpoint(
+  point: Point2D,
+  currentWall: WallElement,
+  walls: WallElement[],
+  threshold: number = 0.15
+): WallEndpointAnalysis {
+  for (const other of walls) {
+    if (other.id === currentWall.id) continue;
+    const dStart = distance(point, other.start);
+    const dEnd = distance(point, other.end);
+    if (dStart <= threshold || dEnd <= threshold) {
+      const curDx = currentWall.end.x - currentWall.start.x;
+      const curDy = currentWall.end.y - currentWall.start.y;
+      const curLen = Math.sqrt(curDx * curDx + curDy * curDy) || 1;
 
-  for (let i = 0; i < walls.length; i++) {
-    for (let j = i + 1; j < walls.length; j++) {
-      const wA = walls[i];
-      const wB = walls[j];
+      const otherDx = other.end.x - other.start.x;
+      const otherDy = other.end.y - other.start.y;
+      const otherLen = Math.sqrt(otherDx * otherDx + otherDy * otherDy) || 1;
 
-      const pairs: [Point2D, Point2D, 'start' | 'end', 'start' | 'end'][] = [
-        [wA.start, wB.start, 'start', 'start'],
-        [wA.start, wB.end, 'start', 'end'],
-        [wA.end, wB.start, 'end', 'start'],
-        [wA.end, wB.end, 'end', 'end'],
-      ];
+      // Direção para o corpo da outra parede a partir da quina
+      const otherConnectedAtStart = dStart <= threshold;
+      const vOtherX = otherConnectedAtStart ? otherDx / otherLen : -otherDx / otherLen;
+      const vOtherY = otherConnectedAtStart ? otherDy / otherLen : -otherDy / otherLen;
 
-      for (const [ptA, ptB, endA, endB] of pairs) {
-        if (distance(ptA, ptB) <= threshold) {
-          const cornerPt = { x: (ptA.x + ptB.x) / 2, y: (ptA.y + ptB.y) / 2 };
-          const thick = Math.max(wA.thickness, wB.thickness);
-          const height = Math.max(wA.height, wB.height);
-          const halfT = thick / 2;
+      // Checa colinearidade (paredes contínuas retas)
+      const dot = Math.abs((curDx * otherDx + curDy * otherDy) / (curLen * otherLen));
+      if (dot > 0.95) {
+        return {
+          connected: true,
+          otherWall: other,
+          isDominant: false,
+          drawCap: false,
+          extendAmount: 0,
+          connectedSide: 0,
+        };
+      }
 
-          const otherPtA = endA === 'start' ? wA.end : wA.start;
-          const lenA = distance(cornerPt, otherPtA);
-          if (lenA < 0.05) continue;
-          const dirA = { x: (otherPtA.x - cornerPt.x) / lenA, y: (otherPtA.y - cornerPt.y) / lenA };
+      // Regra de Dominância da Quina (Horizontal dominante sobre Vertical)
+      const curHorizRatio = Math.abs(curDx) / curLen;
+      const otherHorizRatio = Math.abs(otherDx) / otherLen;
 
-          const otherPtB = endB === 'start' ? wB.end : wB.start;
-          const lenB = distance(cornerPt, otherPtB);
-          if (lenB < 0.05) continue;
-          const dirB = { x: (otherPtB.x - cornerPt.x) / lenB, y: (otherPtB.y - cornerPt.y) / lenB };
+      let isDominant = false;
+      if (Math.abs(curHorizRatio - otherHorizRatio) > 0.05) {
+        isDominant = curHorizRatio > otherHorizRatio;
+      } else {
+        isDominant = currentWall.id < other.id;
+      }
 
-          const outerCorner = {
-            x: cornerPt.x - (dirA.x + dirB.x) * halfT,
-            y: cornerPt.y - (dirA.y + dirB.y) * halfT,
-          };
-          const innerCorner = {
-            x: cornerPt.x + (dirA.x + dirB.x) * halfT,
-            y: cornerPt.y + (dirA.y + dirB.y) * halfT,
-          };
+      // Lado local no Three.js BoxGeometry (+halfW ou -halfW)
+      // O normal da parede é (-curDy / curLen, curDx / curLen)
+      const normalX = -curDy / curLen;
+      const normalY = curDx / curLen;
+      const sideDot = vOtherX * normalX + vOtherY * normalY;
+      const connectedSide: 1 | -1 | 0 = sideDot > 0.05 ? 1 : sideDot < -0.05 ? -1 : 0;
 
-          const edgeStartA = {
-            x: cornerPt.x - dirB.x * halfT,
-            y: cornerPt.y - dirB.y * halfT,
-          };
-          const edgeStartB = {
-            x: cornerPt.x - dirA.x * halfT,
-            y: cornerPt.y - dirA.y * halfT,
-          };
-
-          corners.push({
-            point: cornerPt,
-            thickness: thick,
-            height,
-            wallAId: wA.id,
-            wallBId: wB.id,
-            dirA,
-            dirB,
-            outerCorner,
-            innerCorner,
-            edgeStartA,
-            edgeStartB,
-          });
-        }
+      if (isDominant) {
+        return {
+          connected: true,
+          otherWall: other,
+          isDominant: true,
+          drawCap: true,
+          extendAmount: other.thickness / 2,
+          connectedSide,
+        };
+      } else {
+        return {
+          connected: true,
+          otherWall: other,
+          isDominant: false,
+          drawCap: false,
+          extendAmount: -(other.thickness / 2),
+          connectedSide,
+        };
       }
     }
   }
 
-  return corners;
+  return {
+    connected: false,
+    isDominant: false,
+    drawCap: true,
+    extendAmount: 0,
+    connectedSide: 0,
+  };
 }
 
 export function findWallJoints(walls: WallElement[]): WallJoint[] {

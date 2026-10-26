@@ -5,8 +5,7 @@ import type { Point2D } from '../../cad-core/types';
 import {
   getWallOpenings,
   getSolidWallSegments,
-  isWallEndpointConnected,
-  findCornerJoints,
+  analyzeWallEndpoint,
 } from '../../cad-core/geometry/wallGeometry';
 import { distance } from '../../cad-core/snaps/snapEngine';
 import { CanvasOverlay } from './CanvasOverlay';
@@ -376,25 +375,30 @@ export const CADViewport: React.FC<CADViewportProps> = ({ onCursorMove }) => {
       const openings = getWallOpenings(wall, elements.doors, elements.windows);
       const solidSegments = getSolidWallSegments(wall, openings);
 
-      // 1. Segmentos Sólidos de Alvenaria com Encurtamento Preciso nas Junções Miter
+      // 1. Segmentos Sólidos de Alvenaria com Encontro e Preenchimento Perfeito nas Quinas
       solidSegments.forEach((seg, sIdx) => {
         const isWallStart = sIdx === 0;
         const isWallEnd = sIdx === solidSegments.length - 1;
 
-        const startConnected = isWallStart && isWallEndpointConnected(wall.start, wall.id, elements.walls);
-        const endConnected = isWallEnd && isWallEndpointConnected(wall.end, wall.id, elements.walls);
+        const startAnalysis = isWallStart
+          ? analyzeWallEndpoint(wall.start, wall, elements.walls)
+          : { connected: false, isDominant: false, drawCap: false, extendAmount: 0, connectedSide: 0 as const };
+
+        const endAnalysis = isWallEnd
+          ? analyzeWallEndpoint(wall.end, wall, elements.walls)
+          : { connected: false, isDominant: false, drawCap: false, extendAmount: 0, connectedSide: 0 as const };
 
         let segStart = { ...seg.start };
         let segEnd = { ...seg.end };
 
-        // Se a extremidade estiver conectada a outra parede, recua por thickness / 2 para encostar perfeitamente no bloco do canto
-        if (startConnected) {
-          segStart.x += (dx / wallLen) * (wallThickness / 2);
-          segStart.y += (dy / wallLen) * (wallThickness / 2);
+        // Parede dominante estende (+T/2) para cobrir 100% da quina; parede subserviente recua (-T/2) para encostar na face interna
+        if (startAnalysis.connected) {
+          segStart.x -= (dx / wallLen) * startAnalysis.extendAmount;
+          segStart.y -= (dy / wallLen) * startAnalysis.extendAmount;
         }
-        if (endConnected) {
-          segEnd.x -= (dx / wallLen) * (wallThickness / 2);
-          segEnd.y -= (dy / wallLen) * (wallThickness / 2);
+        if (endAnalysis.connected) {
+          segEnd.x += (dx / wallLen) * endAnalysis.extendAmount;
+          segEnd.y += (dy / wallLen) * endAnalysis.extendAmount;
         }
 
         const segLen = distance(segStart, segEnd);
@@ -410,7 +414,7 @@ export const CADViewport: React.FC<CADViewportProps> = ({ onCursorMove }) => {
         mesh.castShadow = is3D;
         mesh.receiveShadow = is3D;
 
-        // Arestas Inteligentes: desenha as linhas longitudinais e SÓ fecha as tampas se a ponta for LIVRE
+        // Arestas Técnicas Limpas
         const halfL = segLen / 2;
         const halfW = wallThickness / 2;
         const topZ = is3D ? wallHeight / 2 : 0.02;
@@ -418,17 +422,40 @@ export const CADViewport: React.FC<CADViewportProps> = ({ onCursorMove }) => {
 
         const edgePoints: THREE.Vector3[] = [];
 
-        // Linhas longitudinais do topo (lado esquerdo e direito)
-        edgePoints.push(new THREE.Vector3(-halfL, halfW, topZ), new THREE.Vector3(halfL, halfW, topZ));
-        edgePoints.push(new THREE.Vector3(-halfL, -halfW, topZ), new THREE.Vector3(halfL, -halfW, topZ));
-
-        if (is3D) {
-          edgePoints.push(new THREE.Vector3(-halfL, halfW, botZ), new THREE.Vector3(halfL, halfW, botZ));
-          edgePoints.push(new THREE.Vector3(-halfL, -halfW, botZ), new THREE.Vector3(halfL, -halfW, botZ));
+        // Linha longitudinal: Lado +halfW (Eixo Y local positivo)
+        let startXPlus = -halfL;
+        let endXPlus = halfL;
+        if (startAnalysis.isDominant && startAnalysis.connectedSide === 1 && startAnalysis.otherWall) {
+          startXPlus = -halfL + startAnalysis.otherWall.thickness;
+        }
+        if (endAnalysis.isDominant && endAnalysis.connectedSide === 1 && endAnalysis.otherWall) {
+          endXPlus = halfL - endAnalysis.otherWall.thickness;
+        }
+        if (endXPlus - startXPlus > 0.02) {
+          edgePoints.push(new THREE.Vector3(startXPlus, halfW, topZ), new THREE.Vector3(endXPlus, halfW, topZ));
+          if (is3D) {
+            edgePoints.push(new THREE.Vector3(startXPlus, halfW, botZ), new THREE.Vector3(endXPlus, halfW, botZ));
+          }
         }
 
-        // Tampa da ponta inicial: SÓ desenha se NÃO estiver conectada a outra parede
-        if (!startConnected) {
+        // Linha longitudinal: Lado -halfW (Eixo Y local negativo)
+        let startXMinus = -halfL;
+        let endXMinus = halfL;
+        if (startAnalysis.isDominant && startAnalysis.connectedSide === -1 && startAnalysis.otherWall) {
+          startXMinus = -halfL + startAnalysis.otherWall.thickness;
+        }
+        if (endAnalysis.isDominant && endAnalysis.connectedSide === -1 && endAnalysis.otherWall) {
+          endXMinus = halfL - endAnalysis.otherWall.thickness;
+        }
+        if (endXMinus - startXMinus > 0.02) {
+          edgePoints.push(new THREE.Vector3(startXMinus, -halfW, topZ), new THREE.Vector3(endXMinus, -halfW, topZ));
+          if (is3D) {
+            edgePoints.push(new THREE.Vector3(startXMinus, -halfW, botZ), new THREE.Vector3(endXMinus, -halfW, botZ));
+          }
+        }
+
+        // Tampa da ponta inicial: desenha se for livre ou dominante (fecha o contorno externo da quina)
+        if (startAnalysis.drawCap) {
           edgePoints.push(new THREE.Vector3(-halfL, -halfW, topZ), new THREE.Vector3(-halfL, halfW, topZ));
           if (is3D) {
             edgePoints.push(new THREE.Vector3(-halfL, -halfW, botZ), new THREE.Vector3(-halfL, halfW, botZ));
@@ -437,8 +464,8 @@ export const CADViewport: React.FC<CADViewportProps> = ({ onCursorMove }) => {
           }
         }
 
-        // Tampa da ponta final: SÓ desenha se NÃO estiver conectada a outra parede
-        if (!endConnected) {
+        // Tampa da ponta final: desenha se for livre ou dominante (fecha o contorno externo da quina)
+        if (endAnalysis.drawCap) {
           edgePoints.push(new THREE.Vector3(halfL, -halfW, topZ), new THREE.Vector3(halfL, halfW, topZ));
           if (is3D) {
             edgePoints.push(new THREE.Vector3(halfL, -halfW, botZ), new THREE.Vector3(halfL, halfW, botZ));
@@ -551,49 +578,6 @@ export const CADViewport: React.FC<CADViewportProps> = ({ onCursorMove }) => {
           }
         }
       });
-    });
-
-    // E. BLOCOS DE CANTO MITER (União contínua nas quinas sem dentes nem sobreposições)
-    const cornerJoints = findCornerJoints(elements.walls);
-    cornerJoints.forEach((cj) => {
-      const thick = cj.thickness;
-      const height = cj.height;
-
-      // Sólido da quina que preenche exatamente a junção
-      const cornerGeom = new THREE.BoxGeometry(thick, thick, is3D ? height : 0.04);
-      const cornerMesh = new THREE.Mesh(cornerGeom, is3D ? wall3DMaterial : wall2DMaterial);
-      cornerMesh.position.set(cj.point.x, cj.point.y, is3D ? height / 2 : 0.02);
-      cornerMesh.castShadow = is3D;
-      cornerMesh.receiveShadow = is3D;
-
-      // Arestas Externas do Miter
-      const edgePoints: THREE.Vector3[] = [];
-      const topZ = is3D ? height / 2 : 0.02;
-      const botZ = is3D ? -height / 2 : -0.02;
-
-      const relA = new THREE.Vector3(cj.edgeStartA.x - cj.point.x, cj.edgeStartA.y - cj.point.y, topZ);
-      const relOuter = new THREE.Vector3(cj.outerCorner.x - cj.point.x, cj.outerCorner.y - cj.point.y, topZ);
-      const relB = new THREE.Vector3(cj.edgeStartB.x - cj.point.x, cj.edgeStartB.y - cj.point.y, topZ);
-
-      // Topo externo da quina
-      edgePoints.push(relA, relOuter);
-      edgePoints.push(relOuter, relB);
-
-      if (is3D) {
-        const relABot = new THREE.Vector3(cj.edgeStartA.x - cj.point.x, cj.edgeStartA.y - cj.point.y, botZ);
-        const relOuterBot = new THREE.Vector3(cj.outerCorner.x - cj.point.x, cj.outerCorner.y - cj.point.y, botZ);
-        const relBBot = new THREE.Vector3(cj.edgeStartB.x - cj.point.x, cj.edgeStartB.y - cj.point.y, botZ);
-
-        edgePoints.push(relABot, relOuterBot);
-        edgePoints.push(relOuterBot, relBBot);
-        edgePoints.push(relOuterBot, relOuter);
-      }
-
-      const lineGeom = new THREE.BufferGeometry().setFromPoints(edgePoints);
-      const lineMesh = new THREE.LineSegments(lineGeom, is3D ? edgeMaterial3D : edgeMaterial2D);
-      cornerMesh.add(lineMesh);
-
-      group.add(cornerMesh);
     });
   }, [
     elements.walls,
