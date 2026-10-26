@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import type { ProjectDetail } from '../../types';
 import type { Point2D } from '../../cad-core/types';
 import { projectService } from '../../services/api';
@@ -53,7 +53,7 @@ export const EditorPreview: React.FC<EditorPreviewProps> = ({ projectId, onBack 
     };
   }, [projectId, onBack]);
 
-  const handleSave = async () => {
+  const handleSave = useCallback(async () => {
     if (!project) return;
     try {
       const updatedBimData = {
@@ -78,7 +78,45 @@ export const EditorPreview: React.FC<EditorPreviewProps> = ({ projectId, onBack 
     } catch (err: any) {
       alert(err.message || 'Erro ao salvar projeto.');
     }
-  };
+  }, [project, activeLevelId, levels, elements]);
+
+  // Atalhos Globais de Teclado (Ctrl+Z para Desfazer, Ctrl+Shift+Z / Ctrl+Y para Refazer, Ctrl+S para Salvar)
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement;
+      if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA')) {
+        return;
+      }
+
+      // Desfazer: Ctrl+Z / Cmd+Z
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
+        e.preventDefault();
+        if (e.shiftKey) {
+          bimStore.redo();
+        } else {
+          bimStore.undo();
+        }
+        return;
+      }
+
+      // Refazer: Ctrl+Y / Cmd+Y
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'y') {
+        e.preventDefault();
+        bimStore.redo();
+        return;
+      }
+
+      // Salvar: Ctrl+S / Cmd+S
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
+        e.preventDefault();
+        handleSave();
+        return;
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [project, activeLevelId, levels, elements, handleSave]);
 
   if (loading || !project) {
     return (

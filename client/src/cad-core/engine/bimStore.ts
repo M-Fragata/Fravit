@@ -186,6 +186,7 @@ export const bimStore = {
 
   // Adição de Parede com Histórico (Undo)
   addWall: (wall: WallElement) => {
+    const currentClone = structuredClone(currentState.elements);
     const nextWalls = [...currentState.elements.walls, wall];
     const newElements = {
       ...currentState.elements,
@@ -196,7 +197,7 @@ export const bimStore = {
       ...currentState,
       elements: newElements,
       history: {
-        past: [...currentState.history.past, currentState.elements],
+        past: [...currentState.history.past, currentClone],
         future: [],
       },
     };
@@ -210,13 +211,14 @@ export const bimStore = {
 
     const previous = past[past.length - 1];
     const newPast = past.slice(0, past.length - 1);
+    const currentClone = structuredClone(currentState.elements);
 
     currentState = {
       ...currentState,
       elements: previous,
       history: {
         past: newPast,
-        future: [currentState.elements, ...future],
+        future: [currentClone, ...future],
       },
     };
     emitChange();
@@ -224,17 +226,18 @@ export const bimStore = {
 
   // Refazer (Ctrl+Y / Ctrl+Shift+Z)
   redo: () => {
-    const { future } = currentState.history;
+    const { past, future } = currentState.history;
     if (future.length === 0) return;
 
     const next = future[0];
     const newFuture = future.slice(1);
+    const currentClone = structuredClone(currentState.elements);
 
     currentState = {
       ...currentState,
       elements: next,
       history: {
-        past: [...currentState.history.past, currentState.elements],
+        past: [...past, currentClone],
         future: newFuture,
       },
     };

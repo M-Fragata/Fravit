@@ -191,10 +191,10 @@ export const CanvasOverlay: React.FC<CanvasOverlayProps> = ({
         return;
       }
 
-      if (e.key === 'Escape') {
+      if (e.key === 'Escape' || ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z')) {
         setDrawingStart(null);
         setNumericInput('');
-        return;
+        if (e.key === 'Escape') return;
       }
 
       // Entrada numérica direta ao desenhar
