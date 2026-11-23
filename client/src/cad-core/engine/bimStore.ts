@@ -24,6 +24,10 @@ import type {
   SheetViewport,
   Point2D,
 } from '../types';
+import {
+  calculateStretchedWall,
+  getConnectedWallAdjustments,
+} from '../geometry/wallConnections';
 
 export interface BIMState {
   levels: BIMLevel[];
@@ -515,11 +519,22 @@ export const bimStore = {
     }
   },
 
-  // Mover elementos selecionados em lote (Move / Drag)
-  moveElements: (ids: string[], delta: Point2D) => {
+  // Mover elementos selecionados em lote (Move / Drag com auto-healing de paredes conectadas)
+  moveElements: (ids: string[], delta: Point2D, disjoin: boolean = false) => {
     if (ids.length === 0 || (delta.x === 0 && delta.y === 0)) return;
     const currentClone = structuredClone(currentState.elements);
     const idSet = new Set(ids);
+
+    // Ajuste automático de paredes conectadas (L-joins e T-joins) caso disjoin seja false
+    const { adjustedWalls, updatedDoors: connDoors, updatedWindows: connWins } =
+      getConnectedWallAdjustments(
+        currentState.elements.walls,
+        ids,
+        delta,
+        disjoin,
+        currentState.elements.doors,
+        currentState.elements.windows
+      );
 
     const newWalls = currentState.elements.walls.map((w) => {
       if (idSet.has(w.id)) {
@@ -529,8 +544,22 @@ export const bimStore = {
           end: { x: w.end.x + delta.x, y: w.end.y + delta.y },
         };
       }
+      if (adjustedWalls.has(w.id)) {
+        const adj = adjustedWalls.get(w.id)!;
+        return {
+          ...w,
+          start: adj.start ? { ...adj.start } : w.start,
+          end: adj.end ? { ...adj.end } : w.end,
+        };
+      }
       return w;
     });
+
+    const connDoorMap = new Map(connDoors.map((d) => [d.id, d]));
+    const newDoors = currentState.elements.doors.map((d) => connDoorMap.get(d.id) || d);
+
+    const connWinMap = new Map(connWins.map((w) => [w.id, w]));
+    const newWindows = currentState.elements.windows.map((w) => connWinMap.get(w.id) || w);
 
     const newSeparators = currentState.elements.roomSeparators.map((s) => {
       if (idSet.has(s.id)) {
@@ -611,6 +640,8 @@ export const bimStore = {
       elements: {
         ...currentState.elements,
         walls: newWalls,
+        doors: newDoors,
+        windows: newWindows,
         roomSeparators: newSeparators,
         floors: newFloors,
         roofs: newRoofs,
@@ -627,21 +658,36 @@ export const bimStore = {
     emitChange();
   },
 
-  // Esticar extremidade de parede por grip
+  // Esticar extremidade de parede por grip com bloqueio ao atingir esquadrias e fixação de mundo
   updateWallEndpoint: (wallId: string, endpoint: 'start' | 'end', newPos: Point2D) => {
     const currentClone = structuredClone(currentState.elements);
-    const newWalls = currentState.elements.walls.map((w) => {
-      if (w.id === wallId) {
-        return {
-          ...w,
-          [endpoint]: { ...newPos },
-        };
-      }
-      return w;
-    });
+    const wall = currentState.elements.walls.find((w) => w.id === wallId);
+    if (!wall) return;
+
+    const { newWall, updatedDoors, updatedWindows } = calculateStretchedWall(
+      wall,
+      endpoint,
+      newPos,
+      currentState.elements.doors,
+      currentState.elements.windows
+    );
+
+    const newWalls = currentState.elements.walls.map((w) => (w.id === wallId ? newWall : w));
+
+    const updatedDoorMap = new Map(updatedDoors.map((d) => [d.id, d]));
+    const newDoors = currentState.elements.doors.map((d) => updatedDoorMap.get(d.id) || d);
+
+    const updatedWinMap = new Map(updatedWindows.map((w) => [w.id, w]));
+    const newWindows = currentState.elements.windows.map((w) => updatedWinMap.get(w.id) || w);
+
     currentState = {
       ...currentState,
-      elements: { ...currentState.elements, walls: newWalls },
+      elements: {
+        ...currentState.elements,
+        walls: newWalls,
+        doors: newDoors,
+        windows: newWindows,
+      },
       history: {
         past: [...currentState.history.past, currentClone],
         future: [],

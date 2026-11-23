@@ -22,6 +22,10 @@ import {
   computeStairParameters,
 } from '../../cad-core/geometry/wallGeometry';
 import { drawRevitDimension } from '../../cad-core/geometry/revitDimension';
+import {
+  calculateStretchedWall,
+  getConnectedWallAdjustments,
+} from '../../cad-core/geometry/wallConnections';
 
 function distToSegment(p: Point2D, v: Point2D, w: Point2D): number {
   const l2 = (w.x - v.x) ** 2 + (w.y - v.y) ** 2;
@@ -122,6 +126,7 @@ export const CanvasOverlay: React.FC<CanvasOverlayProps> = ({
     gripPoint?: 'start' | 'end';
     targetId?: string;
     apertureType?: 'door' | 'window';
+    disjoin?: boolean;
   } | null>(null);
   const marqueeBoxRef = useRef<{ start: Point2D; current: Point2D } | null>(null);
   const dragActionRef = useRef<{
@@ -132,6 +137,7 @@ export const CanvasOverlay: React.FC<CanvasOverlayProps> = ({
     gripPoint?: 'start' | 'end';
     targetId?: string;
     apertureType?: 'door' | 'window';
+    disjoin?: boolean;
   } | null>(null);
 
   const mousePosScreenRef = useRef<{ x: number; y: number }>({ x: -100, y: -100 });
@@ -140,6 +146,7 @@ export const CanvasOverlay: React.FC<CanvasOverlayProps> = ({
   const isPanningRef = useRef<boolean>(false);
   const startPanMouseRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
   const isSpacePressedRef = useRef<boolean>(false);
+  const isAltPressedRef = useRef<boolean>(false);
 
   // 1. Manter dimensões do Canvas sincronizadas com o container
   useEffect(() => {
@@ -1655,6 +1662,30 @@ export const CanvasOverlay: React.FC<CanvasOverlayProps> = ({
               ctx.stroke();
             }
           });
+
+          // Preview em tempo real das paredes conectadas se esticando (se não estiver desunido pelo Alt)
+          const isDisjoin = isAltPressedRef.current || currentDrag.disjoin;
+          if (!isDisjoin) {
+            const conn = getConnectedWallAdjustments(
+              elements.walls,
+              selectedElementIds,
+              { x: dDx, y: dDy },
+              false
+            );
+            for (const [wId, adj] of conn.adjustedWalls.entries()) {
+              const origW = elements.walls.find((w) => w.id === wId);
+              if (!origW) continue;
+              const pStart = adj.start || origW.start;
+              const pEnd = adj.end || origW.end;
+              const sp1 = worldToScreen(pStart.x, pStart.y);
+              const sp2 = worldToScreen(pEnd.x, pEnd.y);
+              ctx.beginPath();
+              ctx.moveTo(sp1.x, sp1.y);
+              ctx.lineTo(sp2.x, sp2.y);
+              ctx.stroke();
+            }
+          }
+
           elements.roomSeparators.forEach((sep) => {
             if (selSet.has(sep.id)) {
               const sp1 = worldToScreen(sep.start.x + dDx, sep.start.y + dDy);
@@ -1694,10 +1725,17 @@ export const CanvasOverlay: React.FC<CanvasOverlayProps> = ({
         } else if (currentDrag.mode === 'stretch_wall_grip' && currentDrag.wallId) {
           const wall = elements.walls.find((w) => w.id === currentDrag.wallId);
           if (wall) {
-            const fixedPt = currentDrag.gripPoint === 'start' ? wall.end : wall.start;
-            const stretchPt = dCurr;
-            const sFixed = worldToScreen(fixedPt.x, fixedPt.y);
-            const sStretch = worldToScreen(stretchPt.x, stretchPt.y);
+            // Calcula estiramento com bloqueio ao atingir portas/janelas existentes
+            const { newWall } = calculateStretchedWall(
+              wall,
+              currentDrag.gripPoint || 'end',
+              dCurr,
+              elements.doors,
+              elements.windows
+            );
+
+            const sFixed = worldToScreen(newWall.start.x, newWall.start.y);
+            const sStretch = worldToScreen(newWall.end.x, newWall.end.y);
 
             ctx.beginPath();
             ctx.setLineDash([4, 4]);
@@ -1707,7 +1745,7 @@ export const CanvasOverlay: React.FC<CanvasOverlayProps> = ({
             ctx.lineTo(sStretch.x, sStretch.y);
             ctx.stroke();
 
-            const newLen = distance(fixedPt, stretchPt);
+            const newLen = distance(newWall.start, newWall.end);
             const midSx = (sFixed.x + sStretch.x) / 2;
             const midSy = (sFixed.y + sStretch.y) / 2;
             const lenLabel = `${newLen.toFixed(2)} m`;
@@ -1773,6 +1811,11 @@ export const CanvasOverlay: React.FC<CanvasOverlayProps> = ({
   // 3. Captura Global de Teclado (Atalhos Revit de 2 letras, Escape, F8, Espaço, Entrada Numérica direta)
   useEffect(() => {
     const handleGlobalKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Alt') {
+        isAltPressedRef.current = true;
+        triggerRender();
+      }
+
       const target = e.target as HTMLElement;
       if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA')) {
         return;
@@ -1936,6 +1979,10 @@ export const CanvasOverlay: React.FC<CanvasOverlayProps> = ({
     const handleGlobalKeyUp = (e: KeyboardEvent) => {
       if (e.code === 'Space') {
         isSpacePressedRef.current = false;
+      }
+      if (e.key === 'Alt') {
+        isAltPressedRef.current = false;
+        triggerRender();
       }
     };
 
@@ -2168,11 +2215,13 @@ export const CanvasOverlay: React.FC<CanvasOverlayProps> = ({
               mode: 'move',
               startWorld: rawWorld,
               currentWorld: rawWorld,
+              disjoin: e.altKey || isAltPressedRef.current,
             });
             dragActionRef.current = {
               mode: 'move',
               startWorld: rawWorld,
               currentWorld: rawWorld,
+              disjoin: e.altKey || isAltPressedRef.current,
             };
             try {
               e.currentTarget.setPointerCapture(e.pointerId);
@@ -2208,11 +2257,13 @@ export const CanvasOverlay: React.FC<CanvasOverlayProps> = ({
               mode: 'move',
               startWorld: rawWorld,
               currentWorld: rawWorld,
+              disjoin: e.altKey || isAltPressedRef.current,
             });
             dragActionRef.current = {
               mode: 'move',
               startWorld: rawWorld,
               currentWorld: rawWorld,
+              disjoin: e.altKey || isAltPressedRef.current,
             };
           }
 
@@ -2618,7 +2669,11 @@ export const CanvasOverlay: React.FC<CanvasOverlayProps> = ({
         const snap = computeSnap(rawWorld, null, elements.walls, snapConfig, zoomRef.current);
         if (snap) targetWorld = snap.point;
       }
-      dragActionRef.current = { ...dragActionRef.current, currentWorld: targetWorld };
+      dragActionRef.current = {
+        ...dragActionRef.current,
+        currentWorld: targetWorld,
+        disjoin: e.altKey || isAltPressedRef.current,
+      };
       setDragAction({ ...dragActionRef.current });
       triggerRender();
       return;
@@ -2823,7 +2878,11 @@ export const CanvasOverlay: React.FC<CanvasOverlayProps> = ({
 
       if (moveDist > 0.04) {
         if (action.mode === 'move') {
-          bimStore.moveElements(state.selectedElementIds, { x: dx, y: dy });
+          bimStore.moveElements(
+            state.selectedElementIds,
+            { x: dx, y: dy },
+            e.altKey || isAltPressedRef.current || action.disjoin
+          );
         } else if (action.mode === 'stretch_wall_grip' && action.wallId && action.gripPoint) {
           bimStore.updateWallEndpoint(action.wallId, action.gripPoint, action.currentWorld);
         } else if (action.mode === 'slide_aperture' && action.targetId && action.apertureType) {
