@@ -43,6 +43,42 @@ function isPointInsidePolygon(p: Point2D, poly: Point2D[]): boolean {
   return inside;
 }
 
+// Funções de Teste de Caixa de Seleção (Marquee - Revit Window vs Crossing)
+function isPointInBox(p: Point2D, minX: number, maxX: number, minY: number, maxY: number): boolean {
+  return p.x >= minX && p.x <= maxX && p.y >= minY && p.y <= maxY;
+}
+
+function lineIntersectsLine(p1: Point2D, p2: Point2D, p3: Point2D, p4: Point2D): boolean {
+  const d = (p2.x - p1.x) * (p4.y - p3.y) - (p2.y - p1.y) * (p4.x - p3.x);
+  if (Math.abs(d) < 1e-9) return false;
+  const u = ((p3.x - p1.x) * (p4.y - p3.y) - (p3.y - p1.y) * (p4.x - p3.x)) / d;
+  const v = ((p3.x - p1.x) * (p2.y - p1.y) - (p3.y - p1.y) * (p2.x - p1.x)) / d;
+  return u >= 0 && u <= 1 && v >= 0 && v <= 1;
+}
+
+function lineSegmentIntersectsBox(p1: Point2D, p2: Point2D, minX: number, maxX: number, minY: number, maxY: number): boolean {
+  if (isPointInBox(p1, minX, maxX, minY, maxY) || isPointInBox(p2, minX, maxX, minY, maxY)) return true;
+  const c1 = { x: minX, y: minY }, c2 = { x: maxX, y: minY };
+  const c3 = { x: maxX, y: maxY }, c4 = { x: minX, y: maxY };
+  return (
+    lineIntersectsLine(p1, p2, c1, c2) ||
+    lineIntersectsLine(p1, p2, c2, c3) ||
+    lineIntersectsLine(p1, p2, c3, c4) ||
+    lineIntersectsLine(p1, p2, c4, c1)
+  );
+}
+
+function polygonIntersectsBox(poly: Point2D[], minX: number, maxX: number, minY: number, maxY: number): boolean {
+  if (!poly || poly.length < 3) return false;
+  if (poly.some((p) => isPointInBox(p, minX, maxX, minY, maxY))) return true;
+  for (let i = 0; i < poly.length; i++) {
+    const next = poly[(i + 1) % poly.length];
+    if (lineSegmentIntersectsBox(poly[i], next, minX, maxX, minY, maxY)) return true;
+  }
+  const center = { x: (minX + maxX) / 2, y: (minY + maxY) / 2 };
+  return isPointInsidePolygon(center, poly);
+}
+
 interface CanvasOverlayProps {
   panRef: React.MutableRefObject<Point2D>;
   zoomRef: React.MutableRefObject<number>;
@@ -75,6 +111,28 @@ export const CanvasOverlay: React.FC<CanvasOverlayProps> = ({
   const [dimP2, setDimP2] = useState<Point2D | null>(null);
   const [secP1, setSecP1] = useState<Point2D | null>(null);
   const [secP2, setSecP2] = useState<Point2D | null>(null);
+
+  // Estados para Seleção por Caixa (Marquee Revit) e Arrasto/Modificação (Move / Stretch)
+  const [marqueeBox, setMarqueeBox] = useState<{ start: Point2D; current: Point2D } | null>(null);
+  const [dragAction, setDragAction] = useState<{
+    mode: 'move' | 'stretch_wall_grip' | 'slide_aperture';
+    startWorld: Point2D;
+    currentWorld: Point2D;
+    wallId?: string;
+    gripPoint?: 'start' | 'end';
+    targetId?: string;
+    apertureType?: 'door' | 'window';
+  } | null>(null);
+  const marqueeBoxRef = useRef<{ start: Point2D; current: Point2D } | null>(null);
+  const dragActionRef = useRef<{
+    mode: 'move' | 'stretch_wall_grip' | 'slide_aperture';
+    startWorld: Point2D;
+    currentWorld: Point2D;
+    wallId?: string;
+    gripPoint?: 'start' | 'end';
+    targetId?: string;
+    apertureType?: 'door' | 'window';
+  } | null>(null);
 
   const mousePosScreenRef = useRef<{ x: number; y: number }>({ x: -100, y: -100 });
   const rawWorldMouseRef = useRef<Point2D>({ x: 0, y: 0 });
@@ -573,6 +631,123 @@ export const CanvasOverlay: React.FC<CanvasOverlayProps> = ({
           ctx.strokeStyle = '#2563eb';
           ctx.lineWidth = 2.5;
           ctx.stroke();
+        });
+
+        // 5. Telhados Selecionados
+        elements.roofs.forEach((rf) => {
+          if (!selectedElementIds.includes(rf.id) || rf.polygon.length < 3) return;
+          ctx.beginPath();
+          const first = worldToScreen(rf.polygon[0].x, rf.polygon[0].y);
+          ctx.moveTo(first.x, first.y);
+          for (let i = 1; i < rf.polygon.length; i++) {
+            const pt = worldToScreen(rf.polygon[i].x, rf.polygon[i].y);
+            ctx.lineTo(pt.x, pt.y);
+          }
+          ctx.closePath();
+          ctx.fillStyle = 'rgba(234, 88, 12, 0.15)';
+          ctx.fill();
+          ctx.strokeStyle = '#f97316';
+          ctx.lineWidth = 2.5;
+          ctx.stroke();
+        });
+
+        // 6. Portas Selecionadas
+        elements.doors.forEach((door) => {
+          if (!selectedElementIds.includes(door.id)) return;
+          const host = elements.walls.find((w) => w.id === door.wallId);
+          if (!host) return;
+          const dx = host.end.x - host.start.x;
+          const dy = host.end.y - host.start.y;
+          const len = Math.hypot(dx, dy);
+          if (len < 0.05) return;
+          const cx = host.start.x + (dx / len) * (door.offsetRatio * len);
+          const cy = host.start.y + (dy / len) * (door.offsetRatio * len);
+          const sc = worldToScreen(cx, cy);
+          ctx.save();
+          ctx.strokeStyle = '#38bdf8';
+          ctx.lineWidth = 2;
+          ctx.setLineDash([4, 4]);
+          const r = Math.max(14, (door.width / 2) * zoom);
+          ctx.strokeRect(sc.x - r, sc.y - r, r * 2, r * 2);
+          ctx.restore();
+        });
+
+        // 7. Janelas Selecionadas
+        elements.windows.forEach((win) => {
+          if (!selectedElementIds.includes(win.id)) return;
+          const host = elements.walls.find((w) => w.id === win.wallId);
+          if (!host) return;
+          const dx = host.end.x - host.start.x;
+          const dy = host.end.y - host.start.y;
+          const len = Math.hypot(dx, dy);
+          if (len < 0.05) return;
+          const cx = host.start.x + (dx / len) * (win.offsetRatio * len);
+          const cy = host.start.y + (dy / len) * (win.offsetRatio * len);
+          const sc = worldToScreen(cx, cy);
+          ctx.save();
+          ctx.strokeStyle = '#38bdf8';
+          ctx.lineWidth = 2;
+          ctx.setLineDash([4, 4]);
+          const r = Math.max(14, (win.width / 2) * zoom);
+          ctx.strokeRect(sc.x - r, sc.y - r, r * 2, r * 2);
+          ctx.restore();
+        });
+
+        // 8. Escadas Selecionadas
+        elements.stairs.forEach((st) => {
+          if (!selectedElementIds.includes(st.id)) return;
+          const s = worldToScreen(st.start.x, st.start.y);
+          const e = worldToScreen(st.end.x, st.end.y);
+          ctx.strokeStyle = '#38bdf8';
+          ctx.lineWidth = 3;
+          ctx.beginPath();
+          ctx.moveTo(s.x, s.y);
+          ctx.lineTo(e.x, e.y);
+          ctx.stroke();
+        });
+
+        // 9. Cotas Selecionadas
+        elements.dimensions.forEach((dim) => {
+          if (!selectedElementIds.includes(dim.id)) return;
+          const s = worldToScreen(dim.start.x, dim.start.y);
+          const e = worldToScreen(dim.end.x, dim.end.y);
+          ctx.strokeStyle = '#38bdf8';
+          ctx.lineWidth = 3;
+          ctx.beginPath();
+          ctx.moveTo(s.x, s.y);
+          ctx.lineTo(e.x, e.y);
+          ctx.stroke();
+          [s, e].forEach((pt) => {
+            ctx.fillStyle = '#2563eb';
+            ctx.strokeStyle = '#ffffff';
+            ctx.lineWidth = 1.5;
+            ctx.beginPath();
+            ctx.arc(pt.x, pt.y, 4, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.stroke();
+          });
+        });
+
+        // 10. Cortes Selecionados
+        elements.sections.forEach((sec) => {
+          if (!selectedElementIds.includes(sec.id)) return;
+          const s = worldToScreen(sec.start.x, sec.start.y);
+          const e = worldToScreen(sec.end.x, sec.end.y);
+          ctx.strokeStyle = '#38bdf8';
+          ctx.lineWidth = 3;
+          ctx.beginPath();
+          ctx.moveTo(s.x, s.y);
+          ctx.lineTo(e.x, e.y);
+          ctx.stroke();
+          [s, e].forEach((pt) => {
+            ctx.fillStyle = '#2563eb';
+            ctx.strokeStyle = '#ffffff';
+            ctx.lineWidth = 1.5;
+            ctx.beginPath();
+            ctx.arc(pt.x, pt.y, 4, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.stroke();
+          });
         });
 
         ctx.restore();
@@ -1358,11 +1533,6 @@ export const CanvasOverlay: React.FC<CanvasOverlayProps> = ({
           ctx.lineTo(screenSnap.x - 8, screenSnap.y + 7);
           ctx.closePath();
           ctx.stroke();
-        } else if (currentSnapped.type === 'grid') {
-          ctx.fillStyle = '#38bdf8';
-          ctx.beginPath();
-          ctx.arc(screenSnap.x, screenSnap.y, 3.5, 0, Math.PI * 2);
-          ctx.fill();
         }
 
         // Etiqueta Tooltip Normativa do Snap (ex: "Face Externa", "Extremidade Interna", "Eixo Central")
@@ -1394,8 +1564,174 @@ export const CanvasOverlay: React.FC<CanvasOverlayProps> = ({
         }
       }
 
-      // I. Mira Técnica CAD (Crosshair)
-      if (mouse.x > 0 && mouse.y > 0 && !isPanningRef.current) {
+      // ==========================================
+      // I.C CAIXA DE SELEÇÃO MARQUEE (Window / Crossing)
+      // ==========================================
+      const currentMarquee = marqueeBoxRef.current || marqueeBox;
+      if (currentMarquee && activeTool === 'select') {
+        const sStart = worldToScreen(currentMarquee.start.x, currentMarquee.start.y);
+        const sCurr = worldToScreen(currentMarquee.current.x, currentMarquee.current.y);
+        const mLeft = Math.min(sStart.x, sCurr.x);
+        const mTop = Math.min(sStart.y, sCurr.y);
+        const mWidth = Math.abs(sCurr.x - sStart.x);
+        const mHeight = Math.abs(sCurr.y - sStart.y);
+
+        ctx.save();
+        const isCrossing = sCurr.x < sStart.x;
+        if (isCrossing) {
+          // Cruzamento (Direita -> Esquerda): Verde translúcido com borda tracejada
+          ctx.fillStyle = 'rgba(34, 197, 94, 0.15)';
+          ctx.strokeStyle = '#22c55e';
+          ctx.lineWidth = 1.5;
+          ctx.setLineDash([5, 4]);
+        } else {
+          // Janela (Esquerda -> Direita): Azul translúcido com borda contínua
+          ctx.fillStyle = 'rgba(37, 99, 235, 0.18)';
+          ctx.strokeStyle = '#2563eb';
+          ctx.lineWidth = 1.5;
+          ctx.setLineDash([]);
+        }
+        ctx.fillRect(mLeft, mTop, mWidth, mHeight);
+        ctx.strokeRect(mLeft, mTop, mWidth, mHeight);
+        ctx.restore();
+      }
+
+      // ==========================================
+      // I.D PREVIEW DE ARRASTO / MODIFICAÇÃO (Drag / Move / Stretch)
+      // ==========================================
+      const currentDrag = dragActionRef.current || dragAction;
+      if (currentDrag && activeTool === 'select') {
+        ctx.save();
+        const dStart = currentDrag.startWorld;
+        const dCurr = currentDrag.currentWorld;
+        const dDx = dCurr.x - dStart.x;
+        const dDy = dCurr.y - dStart.y;
+        const moveDist = Math.hypot(dDx, dDy);
+
+        if (currentDrag.mode === 'move' && moveDist > 0.02) {
+          // Vetor de deslocamento
+          const s1 = worldToScreen(dStart.x, dStart.y);
+          const s2 = worldToScreen(dCurr.x, dCurr.y);
+          ctx.beginPath();
+          ctx.setLineDash([4, 4]);
+          ctx.strokeStyle = 'rgba(56, 189, 248, 0.85)';
+          ctx.lineWidth = 1.5;
+          ctx.moveTo(s1.x, s1.y);
+          ctx.lineTo(s2.x, s2.y);
+          ctx.stroke();
+
+          // Cota de distância do movimento
+          const midX = (s1.x + s2.x) / 2;
+          const midY = (s1.y + s2.y) / 2;
+          const distLabel = `${moveDist.toFixed(2)} m`;
+          ctx.font = '700 11px "JetBrains Mono", monospace';
+          const tW = ctx.measureText(distLabel).width;
+          ctx.fillStyle = 'rgba(15, 23, 42, 0.9)';
+          ctx.strokeStyle = '#38bdf8';
+          ctx.lineWidth = 1;
+          ctx.setLineDash([]);
+          ctx.beginPath();
+          ctx.roundRect(midX - tW / 2 - 6, midY - 10, tW + 12, 20, 4);
+          ctx.fill();
+          ctx.stroke();
+          ctx.fillStyle = '#38bdf8';
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          ctx.fillText(distLabel, midX, midY);
+
+          // Fantasma translúcido dos itens sendo movidos
+          ctx.setLineDash([5, 5]);
+          ctx.strokeStyle = 'rgba(56, 189, 248, 0.75)';
+          ctx.lineWidth = 2.5;
+
+          const selSet = new Set(selectedElementIds);
+          elements.walls.forEach((w) => {
+            if (selSet.has(w.id)) {
+              const sp1 = worldToScreen(w.start.x + dDx, w.start.y + dDy);
+              const sp2 = worldToScreen(w.end.x + dDx, w.end.y + dDy);
+              ctx.beginPath();
+              ctx.moveTo(sp1.x, sp1.y);
+              ctx.lineTo(sp2.x, sp2.y);
+              ctx.stroke();
+            }
+          });
+          elements.roomSeparators.forEach((sep) => {
+            if (selSet.has(sep.id)) {
+              const sp1 = worldToScreen(sep.start.x + dDx, sep.start.y + dDy);
+              const sp2 = worldToScreen(sep.end.x + dDx, sep.end.y + dDy);
+              ctx.beginPath();
+              ctx.moveTo(sp1.x, sp1.y);
+              ctx.lineTo(sp2.x, sp2.y);
+              ctx.stroke();
+            }
+          });
+          elements.floors.forEach((fl) => {
+            if (selSet.has(fl.id) && fl.polygon.length >= 3) {
+              ctx.beginPath();
+              const f0 = worldToScreen(fl.polygon[0].x + dDx, fl.polygon[0].y + dDy);
+              ctx.moveTo(f0.x, f0.y);
+              for (let i = 1; i < fl.polygon.length; i++) {
+                const pt = worldToScreen(fl.polygon[i].x + dDx, fl.polygon[i].y + dDy);
+                ctx.lineTo(pt.x, pt.y);
+              }
+              ctx.closePath();
+              ctx.stroke();
+            }
+          });
+          elements.rooms.forEach((rm) => {
+            if (selSet.has(rm.id) && rm.polygon.length >= 3) {
+              ctx.beginPath();
+              const f0 = worldToScreen(rm.polygon[0].x + dDx, rm.polygon[0].y + dDy);
+              ctx.moveTo(f0.x, f0.y);
+              for (let i = 1; i < rm.polygon.length; i++) {
+                const pt = worldToScreen(rm.polygon[i].x + dDx, rm.polygon[i].y + dDy);
+                ctx.lineTo(pt.x, pt.y);
+              }
+              ctx.closePath();
+              ctx.stroke();
+            }
+          });
+        } else if (currentDrag.mode === 'stretch_wall_grip' && currentDrag.wallId) {
+          const wall = elements.walls.find((w) => w.id === currentDrag.wallId);
+          if (wall) {
+            const fixedPt = currentDrag.gripPoint === 'start' ? wall.end : wall.start;
+            const stretchPt = dCurr;
+            const sFixed = worldToScreen(fixedPt.x, fixedPt.y);
+            const sStretch = worldToScreen(stretchPt.x, stretchPt.y);
+
+            ctx.beginPath();
+            ctx.setLineDash([4, 4]);
+            ctx.strokeStyle = '#38bdf8';
+            ctx.lineWidth = Math.max(3, wall.thickness * zoom);
+            ctx.moveTo(sFixed.x, sFixed.y);
+            ctx.lineTo(sStretch.x, sStretch.y);
+            ctx.stroke();
+
+            const newLen = distance(fixedPt, stretchPt);
+            const midSx = (sFixed.x + sStretch.x) / 2;
+            const midSy = (sFixed.y + sStretch.y) / 2;
+            const lenLabel = `${newLen.toFixed(2)} m`;
+            ctx.font = '700 11px "JetBrains Mono", monospace';
+            const tW = ctx.measureText(lenLabel).width;
+            ctx.fillStyle = 'rgba(15, 23, 42, 0.9)';
+            ctx.strokeStyle = '#38bdf8';
+            ctx.lineWidth = 1;
+            ctx.setLineDash([]);
+            ctx.beginPath();
+            ctx.roundRect(midSx - tW / 2 - 6, midSy - 10, tW + 12, 20, 4);
+            ctx.fill();
+            ctx.stroke();
+            ctx.fillStyle = '#38bdf8';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(lenLabel, midSx, midSy);
+          }
+        }
+        ctx.restore();
+      }
+
+      // I. Mira Técnica CAD (Crosshair) - apenas ao desenhar (não na ferramenta Selecionar)
+      if (mouse.x > 0 && mouse.y > 0 && !isPanningRef.current && activeTool !== 'select') {
         ctx.strokeStyle = 'rgba(255, 255, 255, 0.4)';
         ctx.lineWidth = 1;
 
@@ -1426,6 +1762,9 @@ export const CanvasOverlay: React.FC<CanvasOverlayProps> = ({
     elements,
     worldToScreen,
     zoomRef,
+    selectedElementIds,
+    marqueeBox,
+    dragAction,
   ]);
 
   const shortcutBufferRef = useRef<string>('');
@@ -1640,12 +1979,61 @@ export const CanvasOverlay: React.FC<CanvasOverlayProps> = ({
       const clickPoint = currentSnapped.point;
       const rawWorld = rawWorldMouseRef.current;
 
-      // 0. SELEÇÃO / INSPEÇÃO (Select)
+      // 0. SELEÇÃO / INSPEÇÃO / MODIFICAÇÃO (Select / Revit Marquee / Move / Grip Stretch)
       if (activeTool === 'select') {
         const p = rawWorld;
+
+        // A. Checa clique em alças (grips) de parede já selecionada para esticar (Stretch)
+        if (state.selectedElementIds.length > 0) {
+          const gripDist = 14 / zoomRef.current;
+          for (const wall of elements.walls) {
+            if (!state.selectedElementIds.includes(wall.id)) continue;
+            if (distance(p, wall.start) <= gripDist) {
+              setDragAction({
+                mode: 'stretch_wall_grip',
+                startWorld: wall.start,
+                currentWorld: wall.start,
+                wallId: wall.id,
+                gripPoint: 'start',
+              });
+              dragActionRef.current = {
+                mode: 'stretch_wall_grip',
+                startWorld: wall.start,
+                currentWorld: wall.start,
+                wallId: wall.id,
+                gripPoint: 'start',
+              };
+              try {
+                e.currentTarget.setPointerCapture(e.pointerId);
+              } catch {}
+              return;
+            }
+            if (distance(p, wall.end) <= gripDist) {
+              setDragAction({
+                mode: 'stretch_wall_grip',
+                startWorld: wall.end,
+                currentWorld: wall.end,
+                wallId: wall.id,
+                gripPoint: 'end',
+              });
+              dragActionRef.current = {
+                mode: 'stretch_wall_grip',
+                startWorld: wall.end,
+                currentWorld: wall.end,
+                wallId: wall.id,
+                gripPoint: 'end',
+              };
+              try {
+                e.currentTarget.setPointerCapture(e.pointerId);
+              } catch {}
+              return;
+            }
+          }
+        }
+
         let foundId: string | null = null;
 
-        // A. Checa Portas
+        // B. Checa Portas
         for (const door of elements.doors) {
           const host = elements.walls.find((w) => w.id === door.wallId);
           if (!host) continue;
@@ -1661,7 +2049,7 @@ export const CanvasOverlay: React.FC<CanvasOverlayProps> = ({
           }
         }
 
-        // B. Checa Janelas
+        // C. Checa Janelas
         if (!foundId) {
           for (const win of elements.windows) {
             const host = elements.walls.find((w) => w.id === win.wallId);
@@ -1679,7 +2067,7 @@ export const CanvasOverlay: React.FC<CanvasOverlayProps> = ({
           }
         }
 
-        // C. Checa Paredes
+        // D. Checa Paredes
         if (!foundId) {
           for (const wall of elements.walls) {
             const d = distToSegment(p, wall.start, wall.end);
@@ -1690,7 +2078,7 @@ export const CanvasOverlay: React.FC<CanvasOverlayProps> = ({
           }
         }
 
-        // D. Checa Separadores de Ambiente
+        // E. Checa Separadores de Ambiente
         if (!foundId) {
           for (const sep of elements.roomSeparators) {
             const d = distToSegment(p, sep.start, sep.end);
@@ -1701,7 +2089,7 @@ export const CanvasOverlay: React.FC<CanvasOverlayProps> = ({
           }
         }
 
-        // E. Checa Ambientes (Rooms)
+        // F. Checa Ambientes (Rooms)
         if (!foundId) {
           for (const rm of elements.rooms) {
             if (isPointInsidePolygon(p, rm.polygon)) {
@@ -1711,7 +2099,7 @@ export const CanvasOverlay: React.FC<CanvasOverlayProps> = ({
           }
         }
 
-        // F. Checa Pisos
+        // G. Checa Pisos
         if (!foundId) {
           for (const fl of elements.floors) {
             if (isPointInsidePolygon(p, fl.polygon)) {
@@ -1721,7 +2109,7 @@ export const CanvasOverlay: React.FC<CanvasOverlayProps> = ({
           }
         }
 
-        // G. Checa Telhados
+        // H. Checa Telhados
         if (!foundId) {
           for (const rf of elements.roofs) {
             if (isPointInsidePolygon(p, rf.polygon)) {
@@ -1731,7 +2119,29 @@ export const CanvasOverlay: React.FC<CanvasOverlayProps> = ({
           }
         }
 
-        // H. Checa Cortes
+        // I. Checa Escadas
+        if (!foundId) {
+          for (const st of elements.stairs) {
+            const d = distToSegment(p, st.start, st.end);
+            if (d <= st.width / 2 + 0.25) {
+              foundId = st.id;
+              break;
+            }
+          }
+        }
+
+        // J. Checa Cotas
+        if (!foundId) {
+          for (const dim of elements.dimensions) {
+            const d = distToSegment(p, dim.start, dim.end);
+            if (d <= 0.35) {
+              foundId = dim.id;
+              break;
+            }
+          }
+        }
+
+        // K. Checa Cortes
         if (!foundId) {
           for (const sec of elements.sections) {
             const d = distToSegment(p, sec.start, sec.end);
@@ -1742,12 +2152,86 @@ export const CanvasOverlay: React.FC<CanvasOverlayProps> = ({
           }
         }
 
+        // Modificadores de Seleção (Padrão Revit: Ctrl adiciona, Shift remove)
         if (foundId) {
-          bimStore.setSelectedElementIds([foundId]);
+          if (e.shiftKey) {
+            bimStore.setSelectedElementIds(state.selectedElementIds.filter((id) => id !== foundId));
+            return;
+          }
+
+          if (e.ctrlKey) {
+            const next = state.selectedElementIds.includes(foundId)
+              ? state.selectedElementIds
+              : [...state.selectedElementIds, foundId];
+            bimStore.setSelectedElementIds(next);
+            setDragAction({
+              mode: 'move',
+              startWorld: rawWorld,
+              currentWorld: rawWorld,
+            });
+            dragActionRef.current = {
+              mode: 'move',
+              startWorld: rawWorld,
+              currentWorld: rawWorld,
+            };
+            try {
+              e.currentTarget.setPointerCapture(e.pointerId);
+            } catch {}
+            return;
+          }
+
+          // Sem tecla modificadora: se elemento não estava selecionado, seleciona só ele
+          if (!state.selectedElementIds.includes(foundId)) {
+            bimStore.setSelectedElementIds([foundId]);
+          }
+
+          // Inicia Drag (Mover em lote ou deslizar esquadria)
+          const isDoor = elements.doors.some((d) => d.id === foundId);
+          const isWin = elements.windows.some((w) => w.id === foundId);
+          if ((isDoor || isWin) && state.selectedElementIds.length <= 1) {
+            setDragAction({
+              mode: 'slide_aperture',
+              startWorld: rawWorld,
+              currentWorld: rawWorld,
+              targetId: foundId,
+              apertureType: isDoor ? 'door' : 'window',
+            });
+            dragActionRef.current = {
+              mode: 'slide_aperture',
+              startWorld: rawWorld,
+              currentWorld: rawWorld,
+              targetId: foundId,
+              apertureType: isDoor ? 'door' : 'window',
+            };
+          } else {
+            setDragAction({
+              mode: 'move',
+              startWorld: rawWorld,
+              currentWorld: rawWorld,
+            });
+            dragActionRef.current = {
+              mode: 'move',
+              startWorld: rawWorld,
+              currentWorld: rawWorld,
+            };
+          }
+
+          try {
+            e.currentTarget.setPointerCapture(e.pointerId);
+          } catch {}
+          return;
         } else {
-          bimStore.clearSelection();
+          // Clique em espaço vazio: limpa seleção (se sem Ctrl/Shift) e inicia Marquee Box
+          if (!e.ctrlKey && !e.shiftKey) {
+            bimStore.clearSelection();
+          }
+          setMarqueeBox({ start: rawWorld, current: rawWorld });
+          marqueeBoxRef.current = { start: rawWorld, current: rawWorld };
+          try {
+            e.currentTarget.setPointerCapture(e.pointerId);
+          } catch {}
+          return;
         }
-        return;
       }
 
       // 1. PAREDE (Wall)
@@ -2119,6 +2603,27 @@ export const CanvasOverlay: React.FC<CanvasOverlayProps> = ({
     const rawWorld = screenToWorld(e.clientX, e.clientY);
     rawWorldMouseRef.current = rawWorld;
 
+    // Atualização de Marquee Box Selection
+    if (marqueeBoxRef.current) {
+      marqueeBoxRef.current = { start: marqueeBoxRef.current.start, current: rawWorld };
+      setMarqueeBox({ ...marqueeBoxRef.current });
+      triggerRender();
+      return;
+    }
+
+    // Atualização de Ação de Arrasto (Move / Stretch / Slide)
+    if (dragActionRef.current) {
+      let targetWorld = rawWorld;
+      if (dragActionRef.current.mode === 'stretch_wall_grip') {
+        const snap = computeSnap(rawWorld, null, elements.walls, snapConfig, zoomRef.current);
+        if (snap) targetWorld = snap.point;
+      }
+      dragActionRef.current = { ...dragActionRef.current, currentWorld: targetWorld };
+      setDragAction({ ...dragActionRef.current });
+      triggerRender();
+      return;
+    }
+
     const snap = computeSnap(rawWorld, drawingStart, elements.walls, snapConfig, zoomRef.current);
     setCurrentSnapped(snap);
 
@@ -2135,6 +2640,205 @@ export const CanvasOverlay: React.FC<CanvasOverlayProps> = ({
         e.currentTarget.releasePointerCapture(e.pointerId);
       } catch {}
     }
+
+    // Finalização de Caixa de Seleção Marquee (Revit Window / Crossing)
+    if (marqueeBoxRef.current) {
+      const box = marqueeBoxRef.current;
+      const minX = Math.min(box.start.x, box.current.x);
+      const maxX = Math.max(box.start.x, box.current.x);
+      const minY = Math.min(box.start.y, box.current.y);
+      const maxY = Math.max(box.start.y, box.current.y);
+
+      if (maxX - minX > 0.05 || maxY - minY > 0.05) {
+        const isCrossing = box.current.x < box.start.x;
+        const hitIds: string[] = [];
+
+        // 1. Paredes
+        elements.walls.forEach((wall) => {
+          if (isCrossing) {
+            if (
+              lineSegmentIntersectsBox(wall.start, wall.end, minX, maxX, minY, maxY) ||
+              (isPointInBox(wall.start, minX, maxX, minY, maxY) && isPointInBox(wall.end, minX, maxX, minY, maxY))
+            ) {
+              hitIds.push(wall.id);
+            }
+          } else {
+            if (isPointInBox(wall.start, minX, maxX, minY, maxY) && isPointInBox(wall.end, minX, maxX, minY, maxY)) {
+              hitIds.push(wall.id);
+            }
+          }
+        });
+
+        // 2. Portas
+        elements.doors.forEach((door) => {
+          const host = elements.walls.find((w) => w.id === door.wallId);
+          if (!host) return;
+          const cx = host.start.x + (host.end.x - host.start.x) * door.offsetRatio;
+          const cy = host.start.y + (host.end.y - host.start.y) * door.offsetRatio;
+          if (isPointInBox({ x: cx, y: cy }, minX, maxX, minY, maxY)) {
+            hitIds.push(door.id);
+          }
+        });
+
+        // 3. Janelas
+        elements.windows.forEach((win) => {
+          const host = elements.walls.find((w) => w.id === win.wallId);
+          if (!host) return;
+          const cx = host.start.x + (host.end.x - host.start.x) * win.offsetRatio;
+          const cy = host.start.y + (host.end.y - host.start.y) * win.offsetRatio;
+          if (isPointInBox({ x: cx, y: cy }, minX, maxX, minY, maxY)) {
+            hitIds.push(win.id);
+          }
+        });
+
+        // 4. Separadores de Ambiente
+        elements.roomSeparators.forEach((sep) => {
+          if (isCrossing) {
+            if (
+              lineSegmentIntersectsBox(sep.start, sep.end, minX, maxX, minY, maxY) ||
+              (isPointInBox(sep.start, minX, maxX, minY, maxY) && isPointInBox(sep.end, minX, maxX, minY, maxY))
+            ) {
+              hitIds.push(sep.id);
+            }
+          } else {
+            if (isPointInBox(sep.start, minX, maxX, minY, maxY) && isPointInBox(sep.end, minX, maxX, minY, maxY)) {
+              hitIds.push(sep.id);
+            }
+          }
+        });
+
+        // 5. Pisos
+        elements.floors.forEach((fl) => {
+          if (isCrossing) {
+            if (polygonIntersectsBox(fl.polygon, minX, maxX, minY, maxY)) {
+              hitIds.push(fl.id);
+            }
+          } else {
+            if (fl.polygon.every((p) => isPointInBox(p, minX, maxX, minY, maxY))) {
+              hitIds.push(fl.id);
+            }
+          }
+        });
+
+        // 6. Telhados
+        elements.roofs.forEach((rf) => {
+          if (isCrossing) {
+            if (polygonIntersectsBox(rf.polygon, minX, maxX, minY, maxY)) {
+              hitIds.push(rf.id);
+            }
+          } else {
+            if (rf.polygon.every((p) => isPointInBox(p, minX, maxX, minY, maxY))) {
+              hitIds.push(rf.id);
+            }
+          }
+        });
+
+        // 7. Ambientes
+        elements.rooms.forEach((rm) => {
+          if (isCrossing) {
+            if (polygonIntersectsBox(rm.polygon, minX, maxX, minY, maxY)) {
+              hitIds.push(rm.id);
+            }
+          } else {
+            if (rm.polygon.every((p) => isPointInBox(p, minX, maxX, minY, maxY))) {
+              hitIds.push(rm.id);
+            }
+          }
+        });
+
+        // 8. Escadas
+        elements.stairs.forEach((st) => {
+          if (isCrossing) {
+            if (
+              lineSegmentIntersectsBox(st.start, st.end, minX, maxX, minY, maxY) ||
+              (isPointInBox(st.start, minX, maxX, minY, maxY) && isPointInBox(st.end, minX, maxX, minY, maxY))
+            ) {
+              hitIds.push(st.id);
+            }
+          } else {
+            if (isPointInBox(st.start, minX, maxX, minY, maxY) && isPointInBox(st.end, minX, maxX, minY, maxY)) {
+              hitIds.push(st.id);
+            }
+          }
+        });
+
+        // 9. Cotas
+        elements.dimensions.forEach((dim) => {
+          if (isCrossing) {
+            if (
+              lineSegmentIntersectsBox(dim.start, dim.end, minX, maxX, minY, maxY) ||
+              (isPointInBox(dim.start, minX, maxX, minY, maxY) && isPointInBox(dim.end, minX, maxX, minY, maxY))
+            ) {
+              hitIds.push(dim.id);
+            }
+          } else {
+            if (isPointInBox(dim.start, minX, maxX, minY, maxY) && isPointInBox(dim.end, minX, maxX, minY, maxY)) {
+              hitIds.push(dim.id);
+            }
+          }
+        });
+
+        // 10. Cortes
+        elements.sections.forEach((sec) => {
+          if (isCrossing) {
+            if (
+              lineSegmentIntersectsBox(sec.start, sec.end, minX, maxX, minY, maxY) ||
+              (isPointInBox(sec.start, minX, maxX, minY, maxY) && isPointInBox(sec.end, minX, maxX, minY, maxY))
+            ) {
+              hitIds.push(sec.id);
+            }
+          } else {
+            if (isPointInBox(sec.start, minX, maxX, minY, maxY) && isPointInBox(sec.end, minX, maxX, minY, maxY)) {
+              hitIds.push(sec.id);
+            }
+          }
+        });
+
+        if (e.shiftKey) {
+          const hitSet = new Set(hitIds);
+          bimStore.setSelectedElementIds(state.selectedElementIds.filter((id) => !hitSet.has(id)));
+        } else if (e.ctrlKey) {
+          const combined = Array.from(new Set([...state.selectedElementIds, ...hitIds]));
+          bimStore.setSelectedElementIds(combined);
+        } else {
+          bimStore.setSelectedElementIds(hitIds);
+        }
+      }
+
+      marqueeBoxRef.current = null;
+      setMarqueeBox(null);
+      triggerRender();
+      try {
+        e.currentTarget.releasePointerCapture(e.pointerId);
+      } catch {}
+      return;
+    }
+
+    // Finalização de Ação de Arrasto (Move / Stretch / Slide)
+    if (dragActionRef.current) {
+      const action = dragActionRef.current;
+      const dx = action.currentWorld.x - action.startWorld.x;
+      const dy = action.currentWorld.y - action.startWorld.y;
+      const moveDist = Math.hypot(dx, dy);
+
+      if (moveDist > 0.04) {
+        if (action.mode === 'move') {
+          bimStore.moveElements(state.selectedElementIds, { x: dx, y: dy });
+        } else if (action.mode === 'stretch_wall_grip' && action.wallId && action.gripPoint) {
+          bimStore.updateWallEndpoint(action.wallId, action.gripPoint, action.currentWorld);
+        } else if (action.mode === 'slide_aperture' && action.targetId && action.apertureType) {
+          bimStore.slideDoorOrWindow(action.targetId, action.apertureType, action.currentWorld);
+        }
+      }
+
+      dragActionRef.current = null;
+      setDragAction(null);
+      triggerRender();
+      try {
+        e.currentTarget.releasePointerCapture(e.pointerId);
+      } catch {}
+      return;
+    }
   };
 
   return (
@@ -2145,7 +2849,13 @@ export const CanvasOverlay: React.FC<CanvasOverlayProps> = ({
           width: '100%',
           height: '100%',
           display: 'block',
-          cursor: isPanning ? 'grabbing' : 'crosshair',
+          cursor: isPanning
+            ? 'grabbing'
+            : dragAction
+            ? 'grabbing'
+            : activeTool === 'select'
+            ? 'default'
+            : 'crosshair',
         }}
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}

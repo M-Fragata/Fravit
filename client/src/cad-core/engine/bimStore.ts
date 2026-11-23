@@ -22,6 +22,7 @@ import type {
   SnapConfig,
   Sheet,
   SheetViewport,
+  Point2D,
 } from '../types';
 
 export interface BIMState {
@@ -509,6 +510,189 @@ export const bimStore = {
           past: [...currentState.history.past, currentClone],
           future: [],
         },
+      };
+      emitChange();
+    }
+  },
+
+  // Mover elementos selecionados em lote (Move / Drag)
+  moveElements: (ids: string[], delta: Point2D) => {
+    if (ids.length === 0 || (delta.x === 0 && delta.y === 0)) return;
+    const currentClone = structuredClone(currentState.elements);
+    const idSet = new Set(ids);
+
+    const newWalls = currentState.elements.walls.map((w) => {
+      if (idSet.has(w.id)) {
+        return {
+          ...w,
+          start: { x: w.start.x + delta.x, y: w.start.y + delta.y },
+          end: { x: w.end.x + delta.x, y: w.end.y + delta.y },
+        };
+      }
+      return w;
+    });
+
+    const newSeparators = currentState.elements.roomSeparators.map((s) => {
+      if (idSet.has(s.id)) {
+        return {
+          ...s,
+          start: { x: s.start.x + delta.x, y: s.start.y + delta.y },
+          end: { x: s.end.x + delta.x, y: s.end.y + delta.y },
+        };
+      }
+      return s;
+    });
+
+    const newFloors = currentState.elements.floors.map((fl) => {
+      if (idSet.has(fl.id)) {
+        return {
+          ...fl,
+          polygon: fl.polygon.map((p) => ({ x: p.x + delta.x, y: p.y + delta.y })),
+        };
+      }
+      return fl;
+    });
+
+    const newRoofs = currentState.elements.roofs.map((rf) => {
+      if (idSet.has(rf.id)) {
+        return {
+          ...rf,
+          polygon: rf.polygon.map((p) => ({ x: p.x + delta.x, y: p.y + delta.y })),
+        };
+      }
+      return rf;
+    });
+
+    const newStairs = currentState.elements.stairs.map((st) => {
+      if (idSet.has(st.id)) {
+        return {
+          ...st,
+          start: { x: st.start.x + delta.x, y: st.start.y + delta.y },
+          end: { x: st.end.x + delta.x, y: st.end.y + delta.y },
+        };
+      }
+      return st;
+    });
+
+    const newRooms = currentState.elements.rooms.map((rm) => {
+      if (idSet.has(rm.id)) {
+        return {
+          ...rm,
+          polygon: rm.polygon.map((p) => ({ x: p.x + delta.x, y: p.y + delta.y })),
+        };
+      }
+      return rm;
+    });
+
+    const newDimensions = currentState.elements.dimensions.map((dim) => {
+      if (idSet.has(dim.id)) {
+        return {
+          ...dim,
+          start: { x: dim.start.x + delta.x, y: dim.start.y + delta.y },
+          end: { x: dim.end.x + delta.x, y: dim.end.y + delta.y },
+        };
+      }
+      return dim;
+    });
+
+    const newSections = currentState.elements.sections.map((sec) => {
+      if (idSet.has(sec.id)) {
+        return {
+          ...sec,
+          start: { x: sec.start.x + delta.x, y: sec.start.y + delta.y },
+          end: { x: sec.end.x + delta.x, y: sec.end.y + delta.y },
+        };
+      }
+      return sec;
+    });
+
+    currentState = {
+      ...currentState,
+      elements: {
+        ...currentState.elements,
+        walls: newWalls,
+        roomSeparators: newSeparators,
+        floors: newFloors,
+        roofs: newRoofs,
+        stairs: newStairs,
+        rooms: newRooms,
+        dimensions: newDimensions,
+        sections: newSections,
+      },
+      history: {
+        past: [...currentState.history.past, currentClone],
+        future: [],
+      },
+    };
+    emitChange();
+  },
+
+  // Esticar extremidade de parede por grip
+  updateWallEndpoint: (wallId: string, endpoint: 'start' | 'end', newPos: Point2D) => {
+    const currentClone = structuredClone(currentState.elements);
+    const newWalls = currentState.elements.walls.map((w) => {
+      if (w.id === wallId) {
+        return {
+          ...w,
+          [endpoint]: { ...newPos },
+        };
+      }
+      return w;
+    });
+    currentState = {
+      ...currentState,
+      elements: { ...currentState.elements, walls: newWalls },
+      history: {
+        past: [...currentState.history.past, currentClone],
+        future: [],
+      },
+    };
+    emitChange();
+  },
+
+  // Deslizar porta ou janela na parede hospedeira
+  slideDoorOrWindow: (id: string, type: 'door' | 'window', targetPoint: Point2D) => {
+    const currentClone = structuredClone(currentState.elements);
+    if (type === 'door') {
+      const door = currentState.elements.doors.find((d) => d.id === id);
+      if (!door) return;
+      const host = currentState.elements.walls.find((w) => w.id === door.wallId);
+      if (!host) return;
+      const dx = host.end.x - host.start.x;
+      const dy = host.end.y - host.start.y;
+      const len = Math.hypot(dx, dy);
+      if (len < 0.1) return;
+      const t = ((targetPoint.x - host.start.x) * dx + (targetPoint.y - host.start.y) * dy) / (len * len);
+      const halfW = (door.width / 2) / len;
+      const clampedRatio = Math.max(halfW, Math.min(1 - halfW, t));
+      const newDoors = currentState.elements.doors.map((d) =>
+        d.id === id ? { ...d, offsetRatio: clampedRatio } : d
+      );
+      currentState = {
+        ...currentState,
+        elements: { ...currentState.elements, doors: newDoors },
+        history: { past: [...currentState.history.past, currentClone], future: [] },
+      };
+      emitChange();
+    } else {
+      const win = currentState.elements.windows.find((w) => w.id === id);
+      if (!win) return;
+      const host = currentState.elements.walls.find((w) => w.id === win.wallId);
+      if (!host) return;
+      const dx = host.end.x - host.start.x;
+      const dy = host.end.y - host.start.y;
+      const len = Math.hypot(dx, dy);
+      if (len < 0.1) return;
+      const t = ((targetPoint.x - host.start.x) * dx + (targetPoint.y - host.start.y) * dy) / (len * len);
+      const halfW = (win.width / 2) / len;
+      const clampedRatio = Math.max(halfW, Math.min(1 - halfW, t));
+      const newWins = currentState.elements.windows.map((w) =>
+        w.id === id ? { ...w, offsetRatio: clampedRatio } : w
+      );
+      currentState = {
+        ...currentState,
+        elements: { ...currentState.elements, windows: newWins },
+        history: { past: [...currentState.history.past, currentClone], future: [] },
       };
       emitChange();
     }
