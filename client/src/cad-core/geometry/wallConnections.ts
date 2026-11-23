@@ -329,3 +329,136 @@ export function getConnectedWallAdjustments(
 
   return { adjustedWalls, updatedDoors, updatedWindows };
 }
+
+export interface MovementSnapResult {
+  delta: Point2D;
+  isSnapped: boolean;
+  guideAxis?: {
+    start: Point2D;
+    end: Point2D;
+    label: string;
+  };
+}
+
+/**
+ * Trava e atrai magneticamente o vetor de movimento para manter paredes 100% retas (sem entortar cantos).
+ * Prioriza perpendicular à parede selecionada, alinhamento axial com paredes conectadas e eixos ortogonais.
+ */
+export function snapMovementVector(
+  rawDelta: Point2D,
+  startWorld: Point2D,
+  selectedWallIds: string[],
+  allWalls: WallElement[],
+  pixelsPerMeter: number,
+  isShiftPressed: boolean = false,
+  isOrthoMode: boolean = false
+): MovementSnapResult {
+  const moveLen = Math.hypot(rawDelta.x, rawDelta.y);
+  if (moveLen < 0.02) {
+    return { delta: rawDelta, isSnapped: false };
+  }
+
+  // Candidatos a direções unitárias de alinhamento
+  const candidates: { unit: Point2D; label: string; priority: number }[] = [
+    { unit: { x: 1, y: 0 }, label: 'Ortogonal (X)', priority: 1 },
+    { unit: { x: 0, y: 1 }, label: 'Ortogonal (Y)', priority: 1 },
+  ];
+
+  const selWalls = allWalls.filter((w) => selectedWallIds.includes(w.id));
+
+  // 1. Direções das paredes selecionadas (perpendicular e paralela)
+  for (const w of selWalls) {
+    const dx = w.end.x - w.start.x;
+    const dy = w.end.y - w.start.y;
+    const len = Math.hypot(dx, dy);
+    if (len > 0.05) {
+      const u = { x: dx / len, y: dy / len };
+      const n = { x: -dy / len, y: dx / len };
+      candidates.push({ unit: n, label: 'Perpendicular (90°)', priority: 2 });
+      candidates.push({ unit: u, label: 'Paralelo à Parede', priority: 2 });
+    }
+  }
+
+  // 2. Direções das paredes conectadas (para manter alinhamento reto sem inclinação)
+  const selIdSet = new Set(selectedWallIds);
+  const staticWalls = allWalls.filter((w) => !selIdSet.has(w.id));
+  for (const staticW of staticWalls) {
+    for (const movedW of selWalls) {
+      const touches =
+        distance(staticW.start, movedW.start) <= 0.15 ||
+        distance(staticW.start, movedW.end) <= 0.15 ||
+        distance(staticW.end, movedW.start) <= 0.15 ||
+        distance(staticW.end, movedW.end) <= 0.15 ||
+        distToSegment(staticW.start, movedW.start, movedW.end) <= movedW.thickness / 2 + 0.12 ||
+        distToSegment(staticW.end, movedW.start, movedW.end) <= movedW.thickness / 2 + 0.12;
+
+      if (touches) {
+        const dx = staticW.end.x - staticW.start.x;
+        const dy = staticW.end.y - staticW.start.y;
+        const len = Math.hypot(dx, dy);
+        if (len > 0.05) {
+          const u = { x: dx / len, y: dy / len };
+          candidates.push({ unit: u, label: 'Alinhamento Reto (Parede Conectada)', priority: 3 });
+        }
+      }
+    }
+  }
+
+  // Filtrar direções quase colineares
+  const uniqueCandidates: { unit: Point2D; label: string; priority: number }[] = [];
+  for (const cand of candidates) {
+    const isDup = uniqueCandidates.some(
+      (existing) =>
+        Math.abs(existing.unit.x * cand.unit.y - existing.unit.y * cand.unit.x) < 1e-4
+    );
+    if (!isDup) {
+      uniqueCandidates.push(cand);
+    }
+  }
+
+  // Encontrar o melhor alinhamento com menor desvio
+  let bestCandidate: { unit: Point2D; label: string; snappedDelta: Point2D; devPx: number } | null = null;
+
+  for (const cand of uniqueCandidates) {
+    const proj = rawDelta.x * cand.unit.x + rawDelta.y * cand.unit.y;
+    const snappedDelta: Point2D = {
+      x: proj * cand.unit.x,
+      y: proj * cand.unit.y,
+    };
+    const dev = Math.hypot(rawDelta.x - snappedDelta.x, rawDelta.y - snappedDelta.y);
+    const devPx = dev * pixelsPerMeter;
+
+    if (!bestCandidate || devPx < bestCandidate.devPx) {
+      bestCandidate = { unit: cand.unit, label: cand.label, snappedDelta, devPx };
+    }
+  }
+
+  if (!bestCandidate) {
+    return { delta: rawDelta, isSnapped: false };
+  }
+
+  // Tolerância generosa de 26 pixels na tela para atração magnética (ou total se Shift/Ortho estiver ativo)
+  const SNAP_THRESHOLD_PX = isShiftPressed || isOrthoMode ? Infinity : 26;
+
+  if (bestCandidate.devPx <= SNAP_THRESHOLD_PX) {
+    const guideLen = 25;
+    return {
+      delta: bestCandidate.snappedDelta,
+      isSnapped: true,
+      guideAxis: {
+        start: {
+          x: startWorld.x - bestCandidate.unit.x * guideLen,
+          y: startWorld.y - bestCandidate.unit.y * guideLen,
+        },
+        end: {
+          x: startWorld.x + bestCandidate.unit.x * guideLen,
+          y: startWorld.y + bestCandidate.unit.y * guideLen,
+        },
+        label: bestCandidate.label,
+      },
+    };
+  }
+
+  return { delta: rawDelta, isSnapped: false };
+}
+

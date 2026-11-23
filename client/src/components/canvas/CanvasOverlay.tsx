@@ -25,6 +25,7 @@ import { drawRevitDimension } from '../../cad-core/geometry/revitDimension';
 import {
   calculateStretchedWall,
   getConnectedWallAdjustments,
+  snapMovementVector,
 } from '../../cad-core/geometry/wallConnections';
 
 function distToSegment(p: Point2D, v: Point2D, w: Point2D): number {
@@ -127,6 +128,11 @@ export const CanvasOverlay: React.FC<CanvasOverlayProps> = ({
     targetId?: string;
     apertureType?: 'door' | 'window';
     disjoin?: boolean;
+    guideAxis?: {
+      start: Point2D;
+      end: Point2D;
+      label: string;
+    };
   } | null>(null);
   const marqueeBoxRef = useRef<{ start: Point2D; current: Point2D } | null>(null);
   const dragActionRef = useRef<{
@@ -138,6 +144,11 @@ export const CanvasOverlay: React.FC<CanvasOverlayProps> = ({
     targetId?: string;
     apertureType?: 'door' | 'window';
     disjoin?: boolean;
+    guideAxis?: {
+      start: Point2D;
+      end: Point2D;
+      label: string;
+    };
   } | null>(null);
 
   const mousePosScreenRef = useRef<{ x: number; y: number }>({ x: -100, y: -100 });
@@ -1646,6 +1657,44 @@ export const CanvasOverlay: React.FC<CanvasOverlayProps> = ({
           ctx.textBaseline = 'middle';
           ctx.fillText(distLabel, midX, midY);
 
+          // Linha de auxílio / guia infinita para manter retas (Perpendicular / Ortogonal)
+          if (currentDrag.guideAxis) {
+            const ga = currentDrag.guideAxis;
+            const gs1 = worldToScreen(ga.start.x, ga.start.y);
+            const gs2 = worldToScreen(ga.end.x, ga.end.y);
+
+            ctx.save();
+            ctx.setLineDash([4, 4]);
+            ctx.strokeStyle = 'rgba(56, 189, 248, 0.85)';
+            ctx.lineWidth = 1.5;
+            ctx.beginPath();
+            ctx.moveTo(gs1.x, gs1.y);
+            ctx.lineTo(gs2.x, gs2.y);
+            ctx.stroke();
+
+            // Etiqueta de alinhamento ao lado da linha guia
+            const gText = ga.label;
+            ctx.font = '600 10px "JetBrains Mono", monospace';
+            const gW = ctx.measureText(gText).width;
+            const badgeGx = s2.x + 16;
+            const badgeGy = s2.y - 22;
+
+            ctx.fillStyle = 'rgba(15, 23, 42, 0.95)';
+            ctx.strokeStyle = '#38bdf8';
+            ctx.lineWidth = 1;
+            ctx.setLineDash([]);
+            ctx.beginPath();
+            ctx.roundRect(badgeGx, badgeGy, gW + 12, 18, 4);
+            ctx.fill();
+            ctx.stroke();
+
+            ctx.fillStyle = '#38bdf8';
+            ctx.textAlign = 'left';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(gText, badgeGx + 6, badgeGy + 9);
+            ctx.restore();
+          }
+
           // Fantasma translúcido dos itens sendo movidos
           ctx.setLineDash([5, 5]);
           ctx.strokeStyle = 'rgba(56, 189, 248, 0.75)';
@@ -1663,7 +1712,7 @@ export const CanvasOverlay: React.FC<CanvasOverlayProps> = ({
             }
           });
 
-          // Preview em tempo real das paredes conectadas se esticando (se não estiver desunido pelo Alt)
+          // Preview em tempo real das paredes conectadas se esticando e suas medidas dinâmicas
           const isDisjoin = isAltPressedRef.current || currentDrag.disjoin;
           if (!isDisjoin) {
             const conn = getConnectedWallAdjustments(
@@ -1679,10 +1728,48 @@ export const CanvasOverlay: React.FC<CanvasOverlayProps> = ({
               const pEnd = adj.end || origW.end;
               const sp1 = worldToScreen(pStart.x, pStart.y);
               const sp2 = worldToScreen(pEnd.x, pEnd.y);
+
+              // Linha fantasma tracejada da parede conectada
+              ctx.save();
+              ctx.setLineDash([5, 5]);
+              ctx.strokeStyle = 'rgba(56, 189, 248, 0.85)';
+              ctx.lineWidth = Math.max(2, (origW.thickness || 0.15) * zoom);
               ctx.beginPath();
               ctx.moveTo(sp1.x, sp1.y);
               ctx.lineTo(sp2.x, sp2.y);
               ctx.stroke();
+
+              // Medida em tempo real da parede conectada (como no Revit)
+              const connLen = distance(pStart, pEnd);
+              const cMidX = (sp1.x + sp2.x) / 2;
+              const cMidY = (sp1.y + sp2.y) / 2;
+              const connText = `${connLen.toFixed(2)} m`;
+
+              const cDx = sp2.x - sp1.x;
+              const cDy = sp2.y - sp1.y;
+              const cDist = Math.hypot(cDx, cDy) || 1;
+              const cNx = -cDy / cDist;
+              const cNy = cDx / cDist;
+              const offsetPx = 22;
+              const badgeX = cMidX + cNx * offsetPx;
+              const badgeY = cMidY + cNy * offsetPx;
+
+              ctx.font = '700 11px "JetBrains Mono", monospace';
+              const cW = ctx.measureText(connText).width;
+              ctx.fillStyle = 'rgba(15, 23, 42, 0.95)';
+              ctx.strokeStyle = '#38bdf8';
+              ctx.lineWidth = 1.2;
+              ctx.setLineDash([]);
+              ctx.beginPath();
+              ctx.roundRect(badgeX - cW / 2 - 6, badgeY - 10, cW + 12, 20, 4);
+              ctx.fill();
+              ctx.stroke();
+
+              ctx.fillStyle = '#38bdf8';
+              ctx.textAlign = 'center';
+              ctx.textBaseline = 'middle';
+              ctx.fillText(connText, badgeX, badgeY);
+              ctx.restore();
             }
           }
 
@@ -1811,8 +1898,8 @@ export const CanvasOverlay: React.FC<CanvasOverlayProps> = ({
   // 3. Captura Global de Teclado (Atalhos Revit de 2 letras, Escape, F8, Espaço, Entrada Numérica direta)
   useEffect(() => {
     const handleGlobalKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Alt') {
-        isAltPressedRef.current = true;
+      if (e.key === 'Alt' || e.key === 'Shift') {
+        if (e.key === 'Alt') isAltPressedRef.current = true;
         triggerRender();
       }
 
@@ -1982,6 +2069,9 @@ export const CanvasOverlay: React.FC<CanvasOverlayProps> = ({
       }
       if (e.key === 'Alt') {
         isAltPressedRef.current = false;
+        triggerRender();
+      }
+      if (e.key === 'Shift') {
         triggerRender();
       }
     };
@@ -2665,14 +2755,37 @@ export const CanvasOverlay: React.FC<CanvasOverlayProps> = ({
     // Atualização de Ação de Arrasto (Move / Stretch / Slide)
     if (dragActionRef.current) {
       let targetWorld = rawWorld;
-      if (dragActionRef.current.mode === 'stretch_wall_grip') {
+      let guideAxis: { start: Point2D; end: Point2D; label: string } | undefined;
+
+      if (dragActionRef.current.mode === 'move') {
+        const rawDelta = {
+          x: rawWorld.x - dragActionRef.current.startWorld.x,
+          y: rawWorld.y - dragActionRef.current.startWorld.y,
+        };
+        const snapRes = snapMovementVector(
+          rawDelta,
+          dragActionRef.current.startWorld,
+          state.selectedElementIds,
+          elements.walls,
+          zoomRef.current,
+          e.shiftKey,
+          snapConfig.orthoMode
+        );
+        targetWorld = {
+          x: dragActionRef.current.startWorld.x + snapRes.delta.x,
+          y: dragActionRef.current.startWorld.y + snapRes.delta.y,
+        };
+        guideAxis = snapRes.guideAxis;
+      } else if (dragActionRef.current.mode === 'stretch_wall_grip') {
         const snap = computeSnap(rawWorld, null, elements.walls, snapConfig, zoomRef.current);
         if (snap) targetWorld = snap.point;
       }
+
       dragActionRef.current = {
         ...dragActionRef.current,
         currentWorld: targetWorld,
         disjoin: e.altKey || isAltPressedRef.current,
+        guideAxis,
       };
       setDragAction({ ...dragActionRef.current });
       triggerRender();
